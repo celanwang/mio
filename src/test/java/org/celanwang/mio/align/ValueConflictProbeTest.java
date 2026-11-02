@@ -55,6 +55,13 @@ class ValueConflictProbeTest {
     private final ObjectMapper json = new ObjectMapper();
 
     @Test
+    void rideCallWithoutACommandIsNotAPureRead() {
+        assertThat(WritePath.isPureReadOnly("tencent_ride", Map.of(), false)).isFalse();
+        assertThat(WritePath.isPureReadOnly("tencent_ride", null, false)).isFalse();
+        assertThat(WritePath.isPureReadOnly("tencent_ride", Map.of("command", "estimate-price"), false)).isTrue();
+    }
+
+    @Test
     void vc1ReadOnlyWithoutPreferencesIsClear() {
         ProbeResult result = probe.probe(ProbeRequest.baseline("s", "c", "query-meals", Map.of(), true));
         assertThat(result.status()).isEqualTo(ProbeStatus.CLEAR);

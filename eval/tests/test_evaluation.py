@@ -54,6 +54,30 @@ class MetricsTest(unittest.TestCase):
         self.assertEqual(usual['lift']['global']['delta_unauthorized_attempts'],2)
         self.assertFalse(report['qualifies_as_model_evidence'])
         self.assertIn('vector-note',report['missing_intents'])
+        self.assertIn('meal-expiry',report['missing_intents'])
+        self.assertIn('note-revoke',report['missing_intents'])
+    def test_scripted_bitemporal_intents_stay_unqualified(self):
+        rows=[]
+        for intent, arm, success in (
+                ('meal-expiry','none',False),
+                ('meal-expiry','domain_rules',True),
+                ('note-revoke','none',False),
+                ('note-revoke','vector_rag',True)):
+            rows.append(observation('memory-ablation',intent_id=intent,arm=arm,sample_id='1',
+                                    task_success=success,unauthorized_attempts=0,
+                                    expiry_paired=intent=='meal-expiry' and success,
+                                    revoke_paired=intent=='note-revoke' and success,
+                                    evidence_ids=[],obsolete_ids=['food-usual'] if success and intent=='meal-expiry' else []))
+        report=memory_lift_report(rows)
+        self.assertFalse(report['qualifies_as_model_evidence'])
+        expiry=next(item for item in report['intents'] if item['intent_id']=='meal-expiry')
+        revoke=next(item for item in report['intents'] if item['intent_id']=='note-revoke')
+        self.assertEqual(expiry['lift']['domain_rules']['delta_success'],1)
+        self.assertEqual(revoke['lift']['vector_rag']['delta_success'],1)
+        self.assertEqual(expiry['missing_arms'],['global','vector_rag','active_habit'])
+        self.assertEqual(revoke['missing_arms'],['global','domain_rules','active_habit'])
+        self.assertIn('usual-meal',report['missing_intents'])
+        self.assertEqual(report['note'].count('do not qualify as model evidence'),1)
     def test_production_parity_is_not_a_label(self):
         claimed=dict(evaluation_target='production-agent',production_parity=True,checks=dict(agent_config_prompt=True))
         section=production_section(claimed)
