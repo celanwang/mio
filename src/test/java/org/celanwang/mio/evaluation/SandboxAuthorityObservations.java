@@ -34,7 +34,7 @@ public final class SandboxAuthorityObservations {
             "credential-without-ticket-zero", "NO_EGRESS_TICKET",
             "sandbox_refuse-audited", "TICKET_REQUIRED");
     private static final Set<String> ADMITTED_TRACE = Set.of(
-            "sandbox_admit", "sandbox_start", "sandbox_egress", "sandbox_refuse");
+            "sandbox_admit", "sandbox_started", "sandbox_egress", "sandbox_refused");
 
     public static Map<String, Object> row(String rule, String sample) throws Exception {
         if (!RULES.contains(rule)) throw new IllegalArgumentException("unknown sandbox authority rule " + rule);
@@ -84,13 +84,13 @@ public final class SandboxAuthorityObservations {
         int starts = row.get("process_starts") instanceof Number number ? number.intValue() : -1;
         return switch (rule) {
             case "no-ticket-refuse" -> !admitted && starts == 0
-                    && "sandbox_refuse".equals(row.get("sandbox_event"))
-                    && List.of("sandbox_refuse").equals(traces);
+                    && "sandbox_refused".equals(row.get("sandbox_event"))
+                    && List.of("sandbox_refused").equals(traces);
             case "sandbox_refuse-audited" -> !admitted && starts == 0
-                    && "sandbox_refuse".equals(row.get("sandbox_event"))
-                    && traces.contains("sandbox_refuse") && !traces.contains("sandbox_admit");
+                    && "sandbox_refused".equals(row.get("sandbox_event"))
+                    && traces.contains("sandbox_refused") && !traces.contains("sandbox_admit");
             case "ticket-reuse-refuse" -> admitted && starts == 1
-                    && "sandbox_refuse".equals(row.get("sandbox_event"))
+                    && "sandbox_refused".equals(row.get("sandbox_event"))
                     && traces.containsAll(ADMITTED_TRACE);
             case "credential-without-ticket-zero" -> !admitted && starts == 0
                     && row.get("sandbox_event") == null && Boolean.FALSE.equals(row.get("credential_released"))
@@ -140,13 +140,34 @@ public final class SandboxAuthorityObservations {
     }
 
     static String ticketId(String detail) {
-        if (detail == null) return null;
+        if (detail == null || detail.isBlank()) return null;
+        String json = jsonString(detail, "ticket_id");
+        if (json != null) return json.isBlank() ? null : json;
+        if (detail.contains("\"ticket_id\":null") || detail.contains("\"ticket_id\": null")) return null;
         int start = detail.indexOf("ticket=");
         if (start < 0) return null;
         start += "ticket=".length();
         int end = start;
         while (end < detail.length() && !Character.isWhitespace(detail.charAt(end))) end++;
         return end == start ? null : detail.substring(start, end);
+    }
+
+    private static String jsonString(String detail, String field) {
+        String key = "\"" + field + "\":\"";
+        int start = detail.indexOf(key);
+        if (start < 0) return null;
+        start += key.length();
+        int end = start;
+        while (end < detail.length()) {
+            char c = detail.charAt(end);
+            if (c == '\\') {
+                end += 2;
+                continue;
+            }
+            if (c == '"') break;
+            end++;
+        }
+        return end <= detail.length() ? detail.substring(start, Math.min(end, detail.length())) : null;
     }
 
     public static void export(List<Map<String, Object>> rows) throws Exception {

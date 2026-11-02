@@ -68,9 +68,10 @@
 
 - 主体工作区隔离，以及 `local-owner` 与 `local-owner-2` 这种前缀相邻主体的跨主体拒绝
 - 执行票据：只读放行、写操作缺少权限链放行、不可逆缺少人工确认、急停未确认、票据不能重复启动进程
-- 审计事件进 `TraceStore`（`sandbox_admit` / `sandbox_refuse` / `sandbox_egress` / `sandbox_start`），明细不含令牌
+- 审计事件进 `TraceStore`。启动、拒绝、不可用分别是 `sandbox_started` / `sandbox_refused` / `sandbox_unavailable`；准入、出站、结束仍是 `sandbox_admit` / `sandbox_egress` / `sandbox_finish`。这三类启动/拒绝/不可用的 `detail` 是 schemaVersion=1 JSON，带必填 `joinKey`、可空 `callId` 与 `ticket_id`、`refuse_code`、`event_kind`、`process_started` 和可选 `tool`。`process_started` 只在子进程或容器启动返回之后为 true；JVM 作用域打开记 `sandbox_started` 且 `process_started` 为 false。不可用不再并进拒绝。明细不含令牌、`Authorization` 或 cookie
 - 打车桥接强制走进程沙箱；沙箱启动失败或缺少下单票据时不启动进程
-- 凭据代理：无票据拒绝出站，且不写 `sandbox_egress` / `sandbox_refuse`（痕迹为空）
+- 凭据代理：无票据拒绝出站，且不写 `sandbox_egress` / `sandbox_refused`（痕迹为空）
+- 影子消费 `sandbox_started` / `sandbox_refused` / `sandbox_unavailable` 只做连续性诊断，不把沙箱拒绝当成策略 DENY，也不把 `policy-mode` 改成 enforce。生产 Agent 的联合验收仍要票据链路对齐；这一接缝单独不声称生产等价
 - 离线夹具的准入投影复用 `SandboxAuthorityObservations` 字段（`sandbox_path`、`policy_engine`、`admitted`、`ticket_id`、`sandbox_event`、`trace_events`、`effect_success`、`process_starts`，以及可选只读 `network_allowed`），不另开采集通道。`network_allowed` 只回显票据上的布尔出网位；缺省或 null 表示这次观察没有记录它。它不授予出网，也不是目的地过滤。`shadow.py` 不消费这个字段
 
 **未建立（不要当成已经做到）：**

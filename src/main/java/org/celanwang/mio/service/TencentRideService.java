@@ -128,7 +128,7 @@ public class TencentRideService {
                 ticket = executor.admitReadonlySystem(tool, input);
             }
             if (!ticket.covers(required, executor.clock())) {
-                audit.refused(sessionId, tool, ticket.principal(), "TICKET_TOO_WEAK", "票据不足以覆盖该出行操作");
+                audit.refused(ticket, "TICKET_TOO_WEAK");
                 return "error：沙箱拒绝执行，票据不足以覆盖该操作，未启动进程。";
             }
             String token = credentials.materialize(ticket, "tencent-ride");
@@ -165,7 +165,7 @@ public class TencentRideService {
             }
             List<String> command = List.of(python.toString(), "-B", "-u", runtime.resolve("personal_agent_bridge.py").toString());
             if (containsSecret(command, mounts, token)) {
-                audit.refused(sessionId, tool, ticket.principal(), "SECRET_IN_ARGV", "命令行包含凭据");
+                audit.refused(ticket, "SECRET_IN_ARGV");
                 return "error：沙箱拒绝执行，未启动进程。";
             }
             ProcessLaunch launch = new ProcessLaunch(ticket, command, mounts, ticket.profile().networkAllowed(), false,
@@ -173,7 +173,7 @@ public class TencentRideService {
             Process process = null;
             try {
                 process = processSandbox.launch(launch);
-                audit.started(ticket, "process sandbox ride");
+                audit.started(ticket, true);
                 try (var stdin = process.getOutputStream()) {
                     stdin.write(json.writeValueAsBytes(request));
                 }
@@ -185,12 +185,13 @@ public class TencentRideService {
                 String result = Files.readString(output, StandardCharsets.UTF_8);
                 if (!token.isBlank()) result = result.replace(token, "[REDACTED]");
                 return result.isBlank() ? "error：打车工具没有返回结果，请先核对当前订单。" : result;
-            } catch (SandboxUnavailableException | SandboxRefusedException failure) {
-                audit.refused(sessionId, tool, ticket.principal(), failure instanceof SandboxRefusedException refused
-                        ? refused.code() : ((SandboxUnavailableException) failure).code(), "进程沙箱拒绝启动");
-                String code = failure instanceof SandboxRefusedException refused ? refused.code()
-                        : ((SandboxUnavailableException) failure).code();
-                log.warn("出行进程沙箱未启动：{} {}", failure.getClass().getSimpleName(), code);
+            } catch (SandboxUnavailableException unavailable) {
+                audit.unavailable(ticket, unavailable.code());
+                log.warn("出行进程沙箱未启动：{} {}", unavailable.getClass().getSimpleName(), unavailable.code());
+                return "error：进程沙箱无法启动，已拒绝执行，未回退到宿主机。";
+            } catch (SandboxRefusedException refused) {
+                audit.refused(ticket, refused.code());
+                log.warn("出行进程沙箱未启动：{} {}", refused.getClass().getSimpleName(), refused.code());
                 return "error：进程沙箱无法启动，已拒绝执行，未回退到宿主机。";
             } catch (InterruptedException failure) {
                 if (process != null) stop(process);
@@ -200,11 +201,14 @@ public class TencentRideService {
                 if (process != null && process.isAlive()) stop(process);
                 Files.deleteIfExists(output);
             }
-        } catch (SandboxRefusedException | SandboxUnavailableException failure) {
-            String code = failure instanceof SandboxRefusedException refused ? refused.code()
-                    : ((SandboxUnavailableException) failure).code();
-            audit.refused(sessionId, tool, executor.principal(), code, "出行沙箱拒绝");
-            return "error：沙箱拒绝执行，未启动进程（" + code + "）。";
+        } catch (SandboxRefusedException refused) {
+            if (ticket != null) audit.refused(ticket, refused.code());
+            else audit.refused(sessionId, tool, executor.principal(), refused.code(), "出行沙箱拒绝");
+            return "error：沙箱拒绝执行，未启动进程（" + refused.code() + "）。";
+        } catch (SandboxUnavailableException unavailable) {
+            if (ticket != null) audit.unavailable(ticket, unavailable.code());
+            else audit.unavailable(sessionId, null, tool, executor.principal(), unavailable.code());
+            return "error：沙箱拒绝执行，未启动进程（" + unavailable.code() + "）。";
         } catch (IOException failure) {
             if (failure.getCause() instanceof InterruptedException) {
                 throw failure;

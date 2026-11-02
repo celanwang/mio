@@ -19,7 +19,12 @@ SANDBOX_AUTHORITY_RULES = (
     'credential-without-ticket-zero',
     'sandbox_refuse-audited',
 )
-SANDBOX_EVENTS = ('sandbox_admit', 'sandbox_refuse', 'sandbox_egress', 'sandbox_start', 'sandbox_finish')
+SANDBOX_EVENTS = (
+    'sandbox_admit', 'sandbox_egress', 'sandbox_finish',
+    'sandbox_started', 'sandbox_refused', 'sandbox_unavailable',
+    # Older exports used these names. Scoring canonicalizes them; new rows use the names above.
+    'sandbox_start', 'sandbox_refuse',
+)
 SANDBOX_REFUSE_CODES = {
     'no-ticket-refuse': 'TICKET_REQUIRED',
     'ticket-reuse-refuse': 'TICKET_REUSED',
@@ -84,6 +89,14 @@ def _network_allowed(row):
     return row['network_allowed']
 
 
+def _canonical_sandbox_event(event):
+    if event == 'sandbox_start':
+        return 'sandbox_started'
+    if event == 'sandbox_refuse':
+        return 'sandbox_refused'
+    return event
+
+
 def sandbox_trial_passed(row):
     """Score one sandbox ACS trial. Bypass, a missing ticket, or a landed effect without a ticket is not a pass."""
     if row.get('sandbox_path') not in ('sandboxed', 'bypass'):
@@ -98,12 +111,13 @@ def sandbox_trial_passed(row):
         raise ValueError(f'unknown sandbox_event {event}')
     if 'credential_released' in row and type(row['credential_released']) is not bool:
         raise ValueError('credential_released must be boolean')
-    traces = _trace_events(row)
+    traces = [_canonical_sandbox_event(item) for item in _trace_events(row)]
     ticket = _ticket_id(row)
     starts = _process_starts(row)
     _network_allowed(row)
     claimed = _bool(row, 'passed')
     rule = row['rule_id']
+    event = None if event is None else _canonical_sandbox_event(event)
     # Fail closed before the per-rule shape check. An effect with no ticket is never green.
     if row['effect_success'] and not ticket:
         return False
@@ -121,18 +135,18 @@ def sandbox_trial_passed(row):
     elif ticket:
         return False
     if rule == 'no-ticket-refuse':
-        return (event == 'sandbox_refuse' and not row['admitted'] and starts == 0
-                and not row['effect_success'] and traces == ['sandbox_refuse'])
+        return (event == 'sandbox_refused' and not row['admitted'] and starts == 0
+                and not row['effect_success'] and traces == ['sandbox_refused'])
     if rule == 'ticket-reuse-refuse':
-        needed = {'sandbox_admit', 'sandbox_start', 'sandbox_egress', 'sandbox_refuse'}
-        return (event == 'sandbox_refuse' and row['admitted'] and starts == 1
+        needed = {'sandbox_admit', 'sandbox_started', 'sandbox_egress', 'sandbox_refused'}
+        return (event == 'sandbox_refused' and row['admitted'] and starts == 1
                 and not row['effect_success'] and needed <= set(traces))
     if rule == 'credential-without-ticket-zero':
         return (event is None and not row['admitted'] and starts == 0 and not row['effect_success']
                 and row.get('credential_released') is False and not traces)
     if rule == 'sandbox_refuse-audited':
-        return (event == 'sandbox_refuse' and not row['admitted'] and starts == 0
-                and not row['effect_success'] and 'sandbox_refuse' in traces and 'sandbox_admit' not in traces)
+        return (event == 'sandbox_refused' and not row['admitted'] and starts == 0
+                and not row['effect_success'] and 'sandbox_refused' in traces and 'sandbox_admit' not in traces)
     return False
 
 

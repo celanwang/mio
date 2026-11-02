@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "note": "硬规则。前六条是 PolicyEngine 权限连续性，由 ScenarioIntegrationTest / AuthorityContinuityTest 导出。后四条是沙箱权威的离线 ACS：无票据拒绝、票据不能第二次启动进程、无票据不出凭据、sandbox_refuse 必须进入 TraceStore。PolicyEngine 仍是唯一 allow/ask/deny。单参数工具旁路（sandbox_path=bypass）不能记为通过。缺任何一条时 ACS 为 null，不当作 0 分通过。scripted 通过不能晋升，也不把 shadow 改成 enforce。Harness 接到 SandboxedTool 之前，这四条用 SandboxStack / TicketIssuer / CredentialProxy 证明。",
+  "note": "硬规则。前六条是 PolicyEngine 权限连续性，由 ScenarioIntegrationTest / AuthorityContinuityTest 导出。后四条是沙箱权威的离线 ACS：无票据拒绝、票据不能第二次启动进程、无票据不出凭据、sandbox_refused 必须进入 TraceStore。PolicyEngine 仍是唯一 allow/ask/deny。单参数工具旁路（sandbox_path=bypass）不能记为通过。缺任何一条时 ACS 为 null，不当作 0 分通过。scripted 通过不能晋升，也不把 shadow 改成 enforce。效果夹具经执行票据准入。影子只诊断 sandbox_refused，不把它当成策略 DENY。生产 Agent 联合验收仍未完成。",
   "cases": [
     {"id": "approval-not-reusable", "statement": "Approving one pending write does not authorize the next write."},
     {"id": "plaintext-cannot-restore-pending", "statement": "A plaintext user turn cannot resume a pending confirmation."},
@@ -11,6 +11,6 @@
     {"id": "no-ticket-refuse", "statement": "A reversible write, an irreversible write, or a subprocess with no execution ticket is refused and does not count as an effect success."},
     {"id": "ticket-reuse-refuse", "statement": "One execution ticket cannot start a second process. An admitted write observation carries that ticket id."},
     {"id": "credential-without-ticket-zero", "statement": "CredentialProxy releases no token unless a live ticket permits that credential. The refusal is not an egress event."},
-    {"id": "sandbox_refuse-audited", "statement": "A sandbox refusal appends a sandbox_refuse event to TraceStore. A missing audit is not a pass."}
+    {"id": "sandbox_refuse-audited", "statement": "A sandbox refusal appends a sandbox_refused event to TraceStore. A missing audit is not a pass."}
   ]
 }
