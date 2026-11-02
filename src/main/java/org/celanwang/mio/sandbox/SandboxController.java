@@ -42,6 +42,7 @@ public class SandboxController {
                 "execution tickets",
                 "credential proxy",
                 "subprocess bubblewrap required"));
+        // Destination filtering and a JVM network namespace are not claims of this payload.
         body.put("notEstablished", List.of(
                 "gvisor",
                 "database row security",

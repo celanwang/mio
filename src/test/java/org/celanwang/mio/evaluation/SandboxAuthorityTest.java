@@ -193,6 +193,44 @@ class SandboxAuthorityTest {
         assertThat(Files.readString(Path.of("eval/gates.json"))).contains("\"approved_for_promotion\": false");
     }
 
+    @Test void networkAllowedIsReadOnlyAndDoesNotGrantEgress() throws Exception {
+        var closed = refusedShape("net-closed");
+        assertThat(closed.get("network_allowed")).isNull();
+        assertThat(SandboxAuthorityObservations.countsAsSandboxPass(closed)).isTrue();
+        SandboxAuthorityObservations.observeNetwork(closed, false);
+        assertThat(closed.get("network_allowed")).isEqualTo(false);
+        assertThat(closed.get("admitted")).isEqualTo(false);
+        assertThat(closed.get("effect_success")).isEqualTo(false);
+        assertThat(closed.get("process_starts")).isEqualTo(0);
+        assertThat(SandboxAuthorityObservations.countsAsSandboxPass(closed)).isTrue();
+
+        var open = refusedShape("net-open");
+        SandboxAuthorityObservations.observeNetwork(open, true);
+        assertThat(SandboxAuthorityObservations.countsAsSandboxPass(open)).isTrue();
+        assertThat(open.get("effect_success")).isEqualTo(false);
+
+        var legacy = refusedShape("net-legacy");
+        legacy.remove("network_allowed");
+        assertThat(SandboxAuthorityObservations.countsAsSandboxPass(legacy)).isTrue();
+
+        var bypass = SandboxAuthorityObservations.row("no-ticket-refuse", "net-bypass");
+        bypass.put("sandbox_path", SandboxAuthorityObservations.PATH_BYPASS);
+        bypass.put("effect_success", true);
+        SandboxAuthorityObservations.observeNetwork(bypass, true);
+        assertThat(SandboxAuthorityObservations.countsAsSandboxPass(bypass)).isFalse();
+
+        var claimed = refusedShape("net-claim");
+        claimed.put("network_allowed", "destination-filter");
+        assertThat(SandboxAuthorityObservations.countsAsSandboxPass(claimed)).isFalse();
+    }
+
+    private static Map<String, Object> refusedShape(String sample) throws Exception {
+        var row = SandboxAuthorityObservations.row("no-ticket-refuse", sample);
+        row.put("sandbox_event", "sandbox_refuse");
+        row.put("trace_events", List.of("sandbox_refuse"));
+        return row;
+    }
+
     private Map<String, Object> refused(World world, String sample, Admission admission) throws Exception {
         assertThatThrownBy(() -> world.executor.admit(admission))
                 .isInstanceOf(SandboxRefusedException.class)

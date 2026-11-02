@@ -15,6 +15,10 @@ import java.util.Set;
  *
  * <p>Scoring lives in {@code eval/effects.py}. This check only stops a row that would not pass from being
  * merged into {@code authority-continuity.jsonl}.
+ *
+ * <p>{@code network_allowed} is an optional read-only echo of the ticket's boolean egress bit
+ * ({@code IsolationProfile.networkAllowed}). Null, or a missing key, means this trial did not record it.
+ * The bit does not grant egress, and it is not a destination filter or a JVM network namespace.
  */
 public final class SandboxAuthorityObservations {
     public static final String PATH_SANDBOXED = "sandboxed";
@@ -47,7 +51,16 @@ public final class SandboxAuthorityObservations {
         row.put("effect_success", false);
         row.put("process_starts", 0);
         row.put("refuse_code", REFUSE_CODES.get(rule));
+        row.put("network_allowed", null);
         return row;
+    }
+
+    /**
+     * Record the ticket boolean already decided by {@code SandboxMatrix}.
+     * Writing the bit does not admit the call or start a process.
+     */
+    public static void observeNetwork(Map<String, Object> row, boolean networkAllowed) {
+        row.put("network_allowed", networkAllowed);
     }
 
     /** True only for a sandboxed scripted trial the aggregator can count. Bypass is always false. */
@@ -58,6 +71,7 @@ public final class SandboxAuthorityObservations {
         if (!Boolean.FALSE.equals(row.get("production_parity"))) return false;
         if (!"PolicyEngine".equals(row.get("policy_engine"))) return false;
         if (!Boolean.FALSE.equals(row.get("effect_success"))) return false;
+        if (!networkObservationOk(row)) return false;
         String rule = String.valueOf(row.get("rule_id"));
         String expectedCode = REFUSE_CODES.get(rule);
         if (expectedCode == null || !expectedCode.equals(row.get("refuse_code"))) return false;
@@ -116,6 +130,13 @@ public final class SandboxAuthorityObservations {
         if (effectSuccess && ticket == null) {
             throw new AssertionError("effect_success without ticket_id");
         }
+    }
+
+    /** Absent or null is unknown. Any other non-boolean is a claim this contract rejects. */
+    private static boolean networkObservationOk(Map<String, Object> row) {
+        if (!row.containsKey("network_allowed")) return true;
+        Object value = row.get("network_allowed");
+        return value == null || value instanceof Boolean;
     }
 
     static String ticketId(String detail) {

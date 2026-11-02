@@ -71,6 +71,19 @@ def _process_starts(row):
     return value
 
 
+def _network_allowed(row):
+    """Optional read-only echo of the ticket's boolean egress bit.
+
+    Absence and null mean the trial did not record it. A boolean is not a grant
+    and not a destination filter. Pass/fail does not branch on the value.
+    """
+    if 'network_allowed' not in row or row['network_allowed'] is None:
+        return None
+    if type(row['network_allowed']) is not bool:
+        raise ValueError('network_allowed must be a boolean or null')
+    return row['network_allowed']
+
+
 def sandbox_trial_passed(row):
     """Score one sandbox ACS trial. Bypass, a missing ticket, or a landed effect without a ticket is not a pass."""
     if row.get('sandbox_path') not in ('sandboxed', 'bypass'):
@@ -88,6 +101,7 @@ def sandbox_trial_passed(row):
     traces = _trace_events(row)
     ticket = _ticket_id(row)
     starts = _process_starts(row)
+    _network_allowed(row)
     claimed = _bool(row, 'passed')
     rule = row['rule_id']
     # Fail closed before the per-rule shape check. An effect with no ticket is never green.

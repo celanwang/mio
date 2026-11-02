@@ -38,6 +38,32 @@ class LinuxProcessSandboxTest {
     }
 
     @Test
+    void booleanEgressIsOnlyUnshareNetAndAMismatchIsRefused() throws Exception {
+        LinuxProcessSandbox sandbox = new LinuxProcessSandbox(standInBwrap());
+        ExecutionTicket closed = ticket(true);
+        ExecutionTicket open = ticket(false);
+        assertThat(closed.profile().networkAllowed()).isFalse();
+        assertThat(open.profile().networkAllowed()).isTrue();
+
+        List<String> offline = sandbox.plan(launch(closed, false, List.of("/bin/true")));
+        List<String> ride = sandbox.plan(launch(open, true, List.of("/bin/true")));
+        assertThat(offline).contains("--unshare-net");
+        assertThat(ride).doesNotContain("--unshare-net");
+        assertThat(offline.stream().filter(arg -> !"--unshare-net".equals(arg)).toList()).isEqualTo(ride);
+        assertThat(offline).doesNotContain("--seccomp", "iptables", "gvisor");
+        assertThat(ride).doesNotContain("--seccomp", "iptables", "gvisor");
+
+        assertThatThrownBy(() -> sandbox.plan(launch(open, false, List.of("/bin/true"))))
+                .isInstanceOf(SandboxRefusedException.class)
+                .extracting(error -> ((SandboxRefusedException) error).code())
+                .isEqualTo("NETWORK_MISMATCH");
+        assertThatThrownBy(() -> sandbox.plan(launch(closed, true, List.of("/bin/true"))))
+                .isInstanceOf(SandboxRefusedException.class)
+                .extracting(error -> ((SandboxRefusedException) error).code())
+                .isEqualTo("NETWORK_MISMATCH");
+    }
+
+    @Test
     void bubblewrapHidesFilesOutsideTheMount() throws Exception {
         LinuxProcessSandbox sandbox = new LinuxProcessSandbox(sandboxPath());
         assumeTrue(sandbox.usable(), "bubblewrap user namespaces are not available");
@@ -60,6 +86,16 @@ class LinuxProcessSandboxTest {
 
     private static Path sandboxPath() {
         return Files.isExecutable(Path.of("/usr/bin/bwrap")) ? Path.of("/usr/bin/bwrap") : Path.of("bwrap");
+    }
+
+    /** plan() only checks that the configured binary is executable. It does not run bubblewrap. */
+    private Path standInBwrap() throws Exception {
+        Path standIn = temp.resolve("bwrap-stand-in");
+        Files.writeString(standIn, "#!/bin/sh\nexit 0\n");
+        if (!standIn.toFile().setExecutable(true)) {
+            throw new IllegalStateException("stand-in binary is not executable");
+        }
+        return standIn;
     }
 
     private ProcessLaunch launch(ExecutionTicket ticket, boolean network, List<String> command) {
