@@ -12,6 +12,10 @@ import io.agentscope.core.state.InMemoryAgentStateStore;
 import io.agentscope.core.tool.ToolBase;
 import io.agentscope.extensions.judge.jev.JevClient;
 import org.celanwang.mio.evaluation.EffectObservations;
+import org.celanwang.mio.evaluation.SandboxAuthorityObservations;
+import org.celanwang.mio.sandbox.ExecutionTicket;
+import org.celanwang.mio.sandbox.OfflineSandbox;
+import org.celanwang.mio.trace.TraceEvent;
 import org.celanwang.mio.memory.HabitDetector;
 import org.celanwang.mio.memory.MioLongTermMemory;
 import org.celanwang.mio.memory.ProfileStore;
@@ -56,7 +60,10 @@ import static org.mockito.Mockito.when;
 class MultiAgentEffectEvalTest {
     @Test void exportMockSupplierEffectCases() throws Exception {
         var rows = new ArrayList<Map<String, Object>>();
-        rows.add(observe("delegation-correct", delegationWrites()));
+        var delegated = delegationWrites();
+        var delegation = observe("delegation-correct", delegated.writes());
+        SandboxAuthorityObservations.copyTrace(delegation, delegated.events(), true, 0);
+        rows.add(delegation);
         rows.add(observe("fact-contract-mismatch", mismatchWrites()));
         rows.add(observe("goal-satisfied-not-write-granted", satisfiedDoesNotGrantWrite()));
         rows.add(observe("expired-quote-snapshot", expiredQuoteWrites()));
@@ -73,14 +80,15 @@ class MultiAgentEffectEvalTest {
         return row;
     }
 
-    private static int delegationWrites() throws Exception {
+    private static RideRun delegationWrites() throws Exception {
         var json = new ObjectMapper();
         var store = new InMemoryCoordinationStore();
         var states = new InMemoryAgentStateStore();
         var policy = new PolicyEngine("shadow");
+        var traces = new TraceStore((session, event) -> {});
         var ride = mock(TencentRideService.class);
         long quotedAt = System.currentTimeMillis() - 1000;
-        when(ride.execute(anyString(), anyMap())).thenReturn(ShortLivedFactTest.quote(quotedAt));
+        when(ride.execute(anyString(), anyMap(), any(ExecutionTicket.class))).thenReturn(ShortLivedFactTest.quote(quotedAt));
         var rideCap = new AgentCapability("ride-domain", "出行", "desc", "ride", "skill-v1", List.of(), CapabilityInputContract.contextual());
         var analysisCap = new AgentCapability("analysis-domain", "分析", "desc", "analysis", "skill-v1", List.of(), CapabilityInputContract.contextual());
         var rideScript = new ArrayDeque<List<ContentBlock>>();
@@ -92,15 +100,16 @@ class MultiAgentEffectEvalTest {
         var rideModel = model(rideScript, new ArrayList<>());
         var analysisModel = model(analysisScript, consumerMessages);
         var dummy = new ToolBase(ToolBase.builder().name("analyze_context").description("read only").readOnly(true).inputSchema(Map.of())) {};
+        try (var sandbox = new OfflineSandbox(policy, traces)) {
         var definitions = List.of(
-                new DomainDefinition(rideCap, "仅查询", () -> List.of(new TencentRideTool(ride))),
+                new DomainDefinition(rideCap, "仅查询", () -> List.of(new TencentRideTool(ride, sandbox.executor))),
                 new DomainDefinition(analysisCap, "分析时间与预算", () -> List.of(dummy)));
         var profiles = mock(ProfileStore.class);
         when(profiles.pages()).thenReturn(List.of());
         when(profiles.render(anyList())).thenReturn("");
         @SuppressWarnings("unchecked") ObjectProvider<JevClient> jev = mock(ObjectProvider.class);
         var factory = new DomainAgentFactory(definitions, capability -> capability.id().equals(rideCap.id()) ? rideModel : analysisModel,
-                states, null, policy, mock(WeiboMcpService.class), jev, .8, new TraceStore((session, event) -> {}),
+                states, null, policy, mock(WeiboMcpService.class), jev, .8, traces,
                 mock(TrustStore.class), mock(MioLongTermMemory.class), mock(HabitDetector.class), profiles, json);
         var runtime = new TaskRuntime(store, new AgentRegistry(List.of(rideCap, analysisCap)), factory, policy, Clock.systemUTC(), 16,
                 List.of(), List.of(), List.of(new TencentQuoteFactExtractor()));
@@ -116,12 +125,15 @@ class MultiAgentEffectEvalTest {
         assertThat(consumer.childSessionId()).isNotEqualTo(source.childSessionId());
         var userText = consumerMessages.get(0).stream().filter(message -> message.getRole() == MsgRole.USER).map(Msg::getTextContent).reduce("", String::concat);
         assertThat(userText).contains("rideQuote", "ride_quote").doesNotContain("private-key", "stateVersion");
-        verify(ride, org.mockito.Mockito.times(1)).execute(eq(source.childSessionId()), anyMap());
+        verify(ride, org.mockito.Mockito.times(1)).execute(eq(source.childSessionId()), anyMap(), any(ExecutionTicket.class));
         verifyNoMoreInteractions(ride);
         assertThat(source.operations()).isEmpty();
         assertThat(consumer.operations()).isEmpty();
-        return source.operations().size() + consumer.operations().size();
+        return new RideRun(source.operations().size() + consumer.operations().size(), traces.events(source.childSessionId()));
+        }
     }
+
+    private record RideRun(int writes, List<TraceEvent> events) {}
 
     private static int mismatchWrites() {
         var starts = new AtomicInteger();

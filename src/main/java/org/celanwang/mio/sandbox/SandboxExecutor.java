@@ -107,13 +107,17 @@ public class SandboxExecutor {
         return Mono.defer(() -> {
             try {
                 ExecutionTicket ticket = admit(Admission.tool(principal(), call, tool, credential));
-                return Mono.using(
-                        () -> open(ticket),
-                        scope -> Mono.fromCallable(() -> ToolResultBlock.text(body.apply(ticket)))
-                                .subscribeOn(Schedulers.boundedElastic()),
-                        SandboxScope::close)
+                SandboxScope scope = open(ticket);
+                return Mono.fromCallable(() -> ToolResultBlock.text(body.apply(ticket)))
+                        .subscribeOn(Schedulers.boundedElastic())
                         .doOnError(error -> audit.finished(ticket, "ERROR"))
-                        .doOnSuccess(ignored -> audit.finished(ticket, "OK"));
+                        .doOnSuccess(ignored -> audit.finished(ticket, "OK"))
+                        .flatMap(result -> {
+                            scope.close();
+                            return Mono.just(result);
+                        })
+                        .doOnError(error -> scope.close())
+                        .doFinally(signal -> scope.close());
             } catch (SandboxRefusedException refused) {
                 return Mono.just(ToolResultBlock.text("error：沙箱拒绝执行，未访问外部服务（" + refused.code() + "）"));
             } catch (SandboxUnavailableException unavailable) {

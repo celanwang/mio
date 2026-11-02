@@ -68,6 +68,9 @@ public final class SandboxedTool extends ToolBase implements ToolContract.Source
         if (SandboxScope.currentTicket().isPresent()) {
             return delegate.callAsync(call);
         }
+        if (executor == null) {
+            return Mono.just(ToolResultBlock.text("error：沙箱拒绝执行，未访问外部服务（TICKET_REQUIRED）"));
+        }
         return Mono.defer(() -> {
             ExecutionTicket ticket;
             SandboxScope scope;
@@ -79,9 +82,16 @@ public final class SandboxedTool extends ToolBase implements ToolContract.Source
             } catch (SandboxUnavailableException unavailable) {
                 return Mono.just(ToolResultBlock.text("error：沙箱无法启动，已拒绝执行（" + unavailable.code() + "）"));
             }
+            // Close before the result is delivered. Reactor runs doFinally after downstream onNext,
+            // and the agent invokes the next tool from that callback. A leaked scope would reuse this ticket.
             return delegate.callAsync(call)
                     .doOnError(error -> executor.audit().finished(ticket, "ERROR"))
                     .doOnSuccess(ignored -> executor.audit().finished(ticket, "OK"))
+                    .flatMap(result -> {
+                        scope.close();
+                        return Mono.just(result);
+                    })
+                    .doOnError(error -> scope.close())
                     .doFinally(signal -> scope.close());
         });
     }

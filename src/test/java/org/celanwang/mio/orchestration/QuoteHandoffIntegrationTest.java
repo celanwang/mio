@@ -7,6 +7,8 @@ import io.agentscope.core.state.InMemoryAgentStateStore;
 import io.agentscope.core.tool.*;
 import io.agentscope.extensions.judge.jev.JevClient;
 import org.celanwang.mio.memory.*;
+import org.celanwang.mio.sandbox.ExecutionTicket;
+import org.celanwang.mio.sandbox.OfflineSandbox;
 import org.celanwang.mio.security.PolicyEngine;
 import org.celanwang.mio.service.*;
 import org.celanwang.mio.tool.TencentRideTool;
@@ -23,8 +25,9 @@ import static org.mockito.ArgumentMatchers.*;
 class QuoteHandoffIntegrationTest {
     @Test void actualDomainLoopsProduceAndConsumeATypedQuoteWithoutSharingBusinessState()throws Exception{
         var json=new ObjectMapper();var store=new InMemoryCoordinationStore();var states=new InMemoryAgentStateStore();var policy=new PolicyEngine("shadow");
+        var traces=new TraceStore((s,e)->{});
         var ride=mock(TencentRideService.class);long quotedAt=System.currentTimeMillis()-1000;
-        when(ride.execute(anyString(),anyMap())).thenReturn(ShortLivedFactTest.quote(quotedAt));
+        when(ride.execute(anyString(),anyMap(),any(ExecutionTicket.class))).thenReturn(ShortLivedFactTest.quote(quotedAt));
         var rideCap=new AgentCapability("ride-domain","出行","desc","ride","skill-v1",List.of(),CapabilityInputContract.contextual());
         var analysisCap=new AgentCapability("analysis-domain","分析","desc","analysis","skill-v1",List.of(),CapabilityInputContract.contextual());
         var rideScript=new ArrayDeque<List<ContentBlock>>();var analysisScript=new ArrayDeque<List<ContentBlock>>();var consumerMessages=new ArrayList<List<Msg>>();
@@ -33,11 +36,12 @@ class QuoteHandoffIntegrationTest {
         analysisScript.add(turn(json,"mio_finish_task",Map.of("text","参考快照估算时间，未执行业务操作")));
         var rideModel=model(rideScript,new ArrayList<>());var analysisModel=model(analysisScript,consumerMessages);
         var dummy=new ToolBase(ToolBase.builder().name("analyze_context").description("read only").readOnly(true).inputSchema(Map.of())){};
-        var definitions=List.of(new DomainDefinition(rideCap,"仅查询",()->List.of(new TencentRideTool(ride))),new DomainDefinition(analysisCap,"分析时间与预算",()->List.of(dummy)));
+        try (var sandbox=new OfflineSandbox(policy, traces)) {
+        var definitions=List.of(new DomainDefinition(rideCap,"仅查询",()->List.of(new TencentRideTool(ride, sandbox.executor))),new DomainDefinition(analysisCap,"分析时间与预算",()->List.of(dummy)));
         var profiles=mock(ProfileStore.class);when(profiles.pages()).thenReturn(List.of());when(profiles.render(anyList())).thenReturn("");
         @SuppressWarnings("unchecked") ObjectProvider<JevClient> jev=mock(ObjectProvider.class);
         var factory=new DomainAgentFactory(definitions,c->c.id().equals(rideCap.id())?rideModel:analysisModel,states,null,policy,mock(WeiboMcpService.class),jev,.8,
-                new TraceStore((s,e)->{}),mock(TrustStore.class),mock(MioLongTermMemory.class),mock(HabitDetector.class),profiles,json);
+                traces,mock(TrustStore.class),mock(MioLongTermMemory.class),mock(HabitDetector.class),profiles,json);
         var runtime=new TaskRuntime(store,new AgentRegistry(List.of(rideCap,analysisCap)),factory,policy,Clock.systemUTC(),16,List.of(),List.of(),List.of(new TencentQuoteFactExtractor()));
         runtime.captureUser("root","先询价，再按报价分析预算，不下单");
         var budget=new RunBudget(new RunBudget.Limits(30,50,10,100000,100000,20000),Clock.systemUTC());
@@ -49,8 +53,9 @@ class QuoteHandoffIntegrationTest {
         assertThat(consumer.status()).isEqualTo(TaskStatus.COMPLETED);assertThat(consumer.childSessionId()).isNotEqualTo(source.childSessionId());
         var userText=consumerMessages.get(0).stream().filter(m->m.getRole()==MsgRole.USER).map(Msg::getTextContent).reduce("",String::concat);
         assertThat(userText).contains("rideQuote","ride_quote","durationSeconds","机场出发层",fact.evidenceId(),fact.version()).doesNotContain("private-key","stateVersion");
-        verify(ride,times(1)).execute(eq(source.childSessionId()),anyMap());verifyNoMoreInteractions(ride);
+        verify(ride,times(1)).execute(eq(source.childSessionId()),anyMap(),any(ExecutionTicket.class));verifyNoMoreInteractions(ride);
         assertThat(source.operations()).isEmpty();assertThat(consumer.operations()).isEmpty();
+        }
     }
     private List<ContentBlock> turn(ObjectMapper json,String tool,Map<String,Object> args)throws Exception{return List.of(ToolUseBlock.builder().id(UUID.randomUUID().toString()).name(tool).input(args).content(json.writeValueAsString(args)).build());}
     private Model model(Deque<List<ContentBlock>> script,List<List<Msg>> inputs){
