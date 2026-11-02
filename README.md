@@ -25,6 +25,7 @@
 - **画像三层作用域**：`global`（跨场景恒真，全量注入）/ `domains/{domain}`（领域隔离，按当前消息相关性注入）/ 会话级例外。晋升单向，信任规则绑定 `{server, 工具, 参数模式}`，零跨域迁移——在一个场景积累的信任，一丝一毫不会泄漏到另一个场景。
 - **技能（SKILL）是领域知识包**：红线规则、工具速查、错误恢复由开发者编写、随仓库版本化；画像学的是"用户是谁"，技能教的是"领域怎么运作"，两者正交互补，安全红线永远留在版本化的技能层而非可变的记忆里。
 - **权限链（`security` 包，唯一裁决点 `PolicyEngine`）**：规则只按工具名匹配，三态 allow/ask/deny，求值固定 deny > ask > allow，无规则覆盖一律转人工。只读操作自主执行；写操作按可逆性分三轨——不可逆操作（下单/支付类）走硬人工轨永远人工确认，可逆写操作走自动审核轨（配置 Jev 时先判断与用户意图的一致性，通过自动执行，不通过或未配置转人工），首次出现的写工具转人工并标记「首见」；只读工具还依赖注册元数据和既有权限链。每次裁决写 `policy_decision` 事件留痕。配套机制：工具返回统一以 `<tool_data>` 分隔符包裹（数据而非指令）；工具注册守卫防多来源同名遮蔽（冲突即失败）；ReAct 循环显式迭代上限；急停开关（`POST /api/security/kill-switch`）开启后非只读一律转人工并吊销全部 ACTIVE 自动化；`/chat` 与 `/api/**` 仅允许本机回环访问。裁决器支持 `shadow`（只留痕）/`enforce` 两档模式，当前默认 shadow。Jev 同时按请求复杂度三档路由模型（长任务/高要求走主模型，点餐、打车等工具流程走标准模型 `qwen3.7-plus`，简单请求走轻量模型）。
+- **沙箱（`sandbox` 包）**：不另做一套放行名单。PolicyEngine（以及已经走到工具 `callAsync` 的人工确认 / Jev 确认）决定能不能做；沙箱只约束已经放行的操作怎么做。风险（只读 / 可逆写 / 不可逆写）和运行时（JVM 内、本地子进程、未来容器）组成矩阵，冲突时取更严的一档。麦当劳菜单与微博读取走 JVM 只读（工作区 + 凭据代理）；麦当劳下单与微博公开发布走 JVM 不可逆（须人工确认，无票据不出站）；打车询价走子进程只读挂载；打车下单走最严子进程沙箱且默认不挂载宿主机凭据目录。缺少执行票据，或 bubblewrap 起不来，不可逆操作和所有子进程都会被拒绝，只读返回错误且不出站，不会悄悄退回裸 `ProcessBuilder`。容器 / gVisor 与数据库行级隔离只留接缝，默认主体仍是 `local-owner`。详见 [docs/sandbox/README.md](docs/sandbox/README.md)。
 - **渐进式自治**：信任统计目前只观察不放行；自动化规则走"习惯发现 → 提议 → 用户批准 → 会话开始执行"，且执行不绕过现有权限链。介入点从"每次执行前"前移到"规则创建时"。
 
 ## 运行要求
@@ -70,7 +71,11 @@ chmod 600 .env
 | `JEV_AUTO_APPROVE_THRESHOLD` | 可选，Jev 自动放行的 Noul 概率阈值，默认 `0.8`。 |
 | `MIO_SKILLS_DIR` | 可选，Agent 技能目录（文件系统路径），默认项目根目录下的 `./skills`。 |
 | `MIO_SECURITY_LOCAL_ONLY` | 可选，默认 `true`，`/chat` 与 `/api/**` 仅允许本机回环访问；仅在部署形态变化时考虑关闭并另行加固。 |
-| `MIO_SECURITY_POLICY_MODE` | 可选，权限裁决模式：`shadow`（默认，裁决只留痕不改变行为）/ `enforce`（硬编码 DENY 规则真正生效）。 |
+| `MIO_SECURITY_POLICY_MODE` | 可选，权限裁决模式：`shadow`（默认，裁决只留痕不改变行为）/ `enforce`（硬编码 DENY 规则真正生效）。沙箱不会改写这一默认值。 |
+| `MIO_SANDBOX_ROOT` / `MIO_SANDBOX_PRINCIPAL` | 可选，沙箱工作区根（默认 `.mio/sandbox`）与主体（默认 `local-owner`）。 |
+| `MIO_SANDBOX_BWRAP` | 可选，bubblewrap 可执行文件，默认 `bwrap`。不可用时本地 Python 桥接失败关闭，不回退宿主机。 |
+| `MIO_SANDBOX_CONTAINER_ENABLED` / `MIO_SANDBOX_CONTAINER_RUNTIME` | 可选，默认关闭。即使打开也只走到容器接缝并拒绝执行，不启动 gVisor，也不改在宿主机跑。 |
+| `MIO_SANDBOX_TICKET_TTL` | 可选，执行票据有效期，默认 `2m`。 |
 | `MIO_AGENT_MAX_ITERS` | 可选，ReAct 循环迭代上限，默认 `20`。 |
 | `MIO_DISTILLER_ENABLED` | 可选，默认 `true`，设为 `false` 关闭对话中的画像自动提炼。 |
 | `MIO_HABIT_DETECTOR_ENABLED` | 可选，默认 `true`，设为 `false` 关闭习惯检测（不再生成自动化提议）。 |

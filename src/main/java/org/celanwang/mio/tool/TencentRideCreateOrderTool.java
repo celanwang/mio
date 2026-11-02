@@ -1,5 +1,8 @@
 package org.celanwang.mio.tool;
 
+import org.celanwang.mio.sandbox.ExecutionTicket;
+import org.celanwang.mio.sandbox.SandboxExecutor;
+import org.celanwang.mio.sandbox.SandboxScope;
 import org.celanwang.mio.service.TencentRideService;
 import io.agentscope.core.message.ToolResultBlock;
 import io.agentscope.core.permission.PermissionContextState;
@@ -19,8 +22,13 @@ public class TencentRideCreateOrderTool extends ToolBase implements org.celanwan
     public static final String NAME = "tencent_ride_create_order";
     private static final Set<String> FIELDS = Set.of("price_estimate_keys", "user_prefer_labels", "stateVersion", "summary");
     private final TencentRideService service;
+    private final SandboxExecutor sandbox;
 
     public TencentRideCreateOrderTool(TencentRideService service) {
+        this(service, null);
+    }
+
+    public TencentRideCreateOrderTool(TencentRideService service, SandboxExecutor sandbox) {
         super(ToolBase.builder().name(NAME)
                 .description("创建腾讯即时打车订单，必须先用 tencent_ride 询价并取得本次真实报价。直接传 price_estimate_keys、stateVersion、summary，不能再套 command 或 parameters，也不传地址、坐标、车型名、Token 或预约时间。选择报价中的真实 priceEstimateKey，stateVersion 原样复制询价结果，summary 清楚写明起终点、所选平台及车型、预估金额和偏好。用户要求最便宜时选最低价，同价无平台偏好可选接口返回的第一项并在摘要中明示。参数有效后展示允许/拒绝确认，批准仅用于本次下单。失败后先查询当前订单，不自动重试。下单成功且用户要司机姓名和车牌时用 tencent_ride 的 query-order 查询；派单中说明尚未分配，不要求先支付才查询。")
                 .inputSchema(Map.of("type", "object", "properties", Map.of(
@@ -35,6 +43,7 @@ public class TencentRideCreateOrderTool extends ToolBase implements org.celanwan
                         "required", List.of("price_estimate_keys", "stateVersion", "summary"), "additionalProperties", false))
                 .readOnly(false).concurrencySafe(false));
         this.service = service;
+        this.sandbox = sandbox;
     }
 
     private static String validationError(Map<String, Object> input) {
@@ -74,23 +83,41 @@ public class TencentRideCreateOrderTool extends ToolBase implements org.celanwan
     @Override public String operationScope(){return service.operationScope();}
     @Override public Mono<ToolResultBlock> callWithOperation(ToolCallParam call,String logicalId,String scopeKey){return execute(call,logicalId,scopeKey);}
     private Mono<ToolResultBlock> execute(ToolCallParam call,String logicalId,String scopeKey){
-        return Mono.fromCallable(() -> {
-            String error = validationError(call.getInput());
-            if (error != null) return ToolResultBlock.text(error);
-            var input = call.getInput();
-            Map<String, Object> parameters = new LinkedHashMap<>();
-            parameters.put("price_estimate_keys", input.get("price_estimate_keys"));
-            if (input.get("user_prefer_labels") instanceof List<?> labels) {
-                parameters.put("user_prefer_labels", labels.stream().map(value -> ((Number) value).intValue()).toList());
+        ExecutionTicket existing = SandboxScope.currentTicket().orElse(null);
+        if (existing == null && sandbox == null) {
+            return Mono.fromCallable(() -> ToolResultBlock.text(invoke(call, logicalId, scopeKey, null)))
+                    .subscribeOn(Schedulers.boundedElastic());
+        }
+        if (existing != null) {
+            return Mono.fromCallable(() -> ToolResultBlock.text(invoke(call, logicalId, scopeKey, existing)))
+                    .subscribeOn(Schedulers.boundedElastic());
+        }
+        return sandbox.guardCall(call, this, "tencent-ride", ticket -> {
+            try {
+                return invoke(call, logicalId, scopeKey, ticket);
+            } catch (java.io.IOException failure) {
+                throw new IllegalStateException(failure);
             }
-            Map<String, Object> request = new LinkedHashMap<>(Map.of("command", "create-order", "parameters", parameters,
-                    "stateVersion", input.get("stateVersion"), "summary", input.get("summary")));
-            if(logicalId!=null){
-                if(!service.operationScope().equals(scopeKey))throw new IllegalStateException("账号配置已改变，请重新准备操作");
-                request.put("logicalOperationId",logicalId);request.put("operationScope",scopeKey);
-            }
-            String session = call.getRuntimeContext() == null ? null : call.getRuntimeContext().getSessionId();
-            return ToolResultBlock.text(service.execute(session, request));
-        }).subscribeOn(Schedulers.boundedElastic());
+        });
+    }
+
+    private String invoke(ToolCallParam call, String logicalId, String scopeKey, ExecutionTicket ticket) throws java.io.IOException {
+        String error = validationError(call.getInput());
+        if (error != null) return error;
+        var input = call.getInput();
+        Map<String, Object> parameters = new LinkedHashMap<>();
+        parameters.put("price_estimate_keys", input.get("price_estimate_keys"));
+        if (input.get("user_prefer_labels") instanceof List<?> labels) {
+            parameters.put("user_prefer_labels", labels.stream().map(value -> ((Number) value).intValue()).toList());
+        }
+        Map<String, Object> request = new LinkedHashMap<>(Map.of("command", "create-order", "parameters", parameters,
+                "stateVersion", input.get("stateVersion"), "summary", input.get("summary")));
+        if (logicalId != null) {
+            if (!service.operationScope().equals(scopeKey)) throw new IllegalStateException("账号配置已改变，请重新准备操作");
+            request.put("logicalOperationId", logicalId);
+            request.put("operationScope", scopeKey);
+        }
+        String session = call.getRuntimeContext() == null ? null : call.getRuntimeContext().getSessionId();
+        return ticket == null ? service.execute(session, request) : service.execute(session, request, ticket);
     }
 }

@@ -1,5 +1,6 @@
 package org.celanwang.mio.config;
 
+import org.celanwang.mio.sandbox.SandboxExecutor;
 import org.celanwang.mio.security.ToolRegistrationGuard;
 import org.celanwang.mio.service.TencentRideService;
 import org.celanwang.mio.tool.TencentRideTool;
@@ -14,12 +15,13 @@ import org.springframework.context.annotation.Configuration;
 public class TencentRideConfig {
     @Bean
     public SmartInitializingSingleton registerTencentRideTool(ReActAgent agent, TencentRideService service,
-                                                              ToolRegistrationGuard registrationGuard) {
+                                                              ToolRegistrationGuard registrationGuard,
+                                                              SandboxExecutor sandbox) {
         // 注册到 Agent 实际使用的 Toolkit 副本；启动时不执行 Python 或外部业务请求。
         return () -> {
             Toolkit toolkit = agent.getToolkit();
-            TencentRideTool rideTool = new TencentRideTool(service);
-            TencentRideCreateOrderTool orderTool = new TencentRideCreateOrderTool(service);
+            TencentRideTool rideTool = new TencentRideTool(service, sandbox);
+            TencentRideCreateOrderTool orderTool = new TencentRideCreateOrderTool(service, sandbox);
             // 注册守卫：重名即启动失败（防工具遮蔽）。
             registrationGuard.checkLocalTool(toolkit, rideTool, "tencent-ride");
             registrationGuard.checkLocalTool(toolkit, orderTool, "tencent-ride");

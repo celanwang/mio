@@ -4,6 +4,10 @@ import org.celanwang.mio.orchestration.CapabilityAvailability;
 
 import org.celanwang.mio.config.WeiboProperties;
 import org.celanwang.mio.model.vo.WeiboAction;
+import org.celanwang.mio.sandbox.CredentialProxy;
+import org.celanwang.mio.sandbox.SandboxExecutor;
+import org.celanwang.mio.sandbox.SandboxScope;
+import org.celanwang.mio.sandbox.SandboxToolInstaller;
 import org.celanwang.mio.security.ToolRegistrationGuard;
 import org.celanwang.mio.tool.WeiboConnectionTool;
 import io.agentscope.core.ReActAgent;
@@ -31,6 +35,8 @@ public class WeiboMcpService {
     private final WeiboOAuthService oauth;
     private final Toolkit toolkit;
     private final ToolRegistrationGuard registrationGuard;
+    private final SandboxExecutor sandbox;
+    private final CredentialProxy credentials;
     private volatile McpClientWrapper client;
     private int toolCount;
     private String error;
@@ -39,19 +45,31 @@ public class WeiboMcpService {
 
     @Autowired
     public WeiboMcpService(WeiboProperties properties, WeiboOAuthService oauth, ReActAgent agent,
-                           ToolRegistrationGuard registrationGuard) {
+                           ToolRegistrationGuard registrationGuard, SandboxExecutor sandbox,
+                           CredentialProxy credentials) {
         // AgentScope 构建 Agent 时会复制 Toolkit；授权后的工具必须注册到实际运行的副本。
-        this(properties, oauth, agent.getToolkit(), registrationGuard);
+        this(properties, oauth, agent.getToolkit(), registrationGuard, sandbox, credentials);
     }
 
     WeiboMcpService(WeiboProperties properties, WeiboOAuthService oauth, Toolkit toolkit,
                     ToolRegistrationGuard registrationGuard) {
+        this(properties, oauth, toolkit, registrationGuard, null, null);
+    }
+
+    private WeiboMcpService(WeiboProperties properties, WeiboOAuthService oauth, Toolkit toolkit,
+                            ToolRegistrationGuard registrationGuard, SandboxExecutor sandbox,
+                            CredentialProxy credentials) {
         this.properties = properties;
         this.oauth = oauth;
         this.toolkit = toolkit;
         this.registrationGuard = registrationGuard;
+        this.sandbox = sandbox;
+        this.credentials = credentials;
         toolkit.removeTool(WeiboConnectionTool.NAME);
         toolkit.registerAgentTool(new WeiboConnectionTool(this));
+        if (sandbox != null) {
+            SandboxToolInstaller.wrap(toolkit, java.util.List.of(WeiboConnectionTool.NAME), sandbox, "weibo");
+        }
     }
 
     public synchronized String prepareForConversation(String sessionId) {
@@ -85,14 +103,24 @@ public class WeiboMcpService {
     public synchronized void connect() {
         if (!properties.isEnabled()) throw new IllegalStateException("微博 MCP 未启用。");
         oauth.accessToken();
+        if (sandbox != null && SandboxScope.currentTicket().isEmpty()) {
+            sandbox.bootstrap("weibo", () -> { openClient(); return null; });
+            return;
+        }
+        openClient();
+    }
+
+    private void openClient() {
         close();
         var transport = HttpClientStreamableHttpTransport.builder(properties.getUrl().toString())
                 .clientBuilder(WeiboHttpClient.builder())
                 .endpoint(properties.getUrl().getRawPath())
                 .openConnectionOnStartup(false)
                 .asyncHttpRequestCustomizer((request, method, uri, body, context) ->
-                        Mono.fromCallable(() -> request.setHeader("Authorization", "Bearer " + oauth.accessToken()))
-                                .subscribeOn(Schedulers.boundedElastic()))
+                        Mono.fromCallable(() -> {
+                            request.setHeader("Authorization", "Bearer " + bearer());
+                            return request;
+                        }).subscribeOn(Schedulers.boundedElastic()))
                 .build();
         var sdkClient = McpClient.async(transport).requestTimeout(Duration.ofSeconds(30))
                 .initializationTimeout(Duration.ofSeconds(30)).build();
@@ -111,8 +139,13 @@ public class WeiboMcpService {
             }
             toolkit.registerMcpClient(candidate).block(Duration.ofSeconds(40));
             registrationGuard.verifyMcpRegistration(toolkit, before, tools.size(), "weibo-mcp");
-            businessTools = staging.getToolNames().stream()
-                    .map(name -> (io.agentscope.core.tool.ToolBase) staging.getTool(name)).toList();
+            var added = new java.util.HashSet<>(toolkit.getToolNames());
+            added.removeAll(before);
+            if (sandbox != null) {
+                SandboxToolInstaller.wrap(toolkit, added, sandbox, "weibo");
+            }
+            businessTools = added.stream()
+                    .map(name -> (io.agentscope.core.tool.ToolBase) toolkit.getTool(name)).toList();
             client = candidate;
             toolCount = tools.size();
             error = null;
@@ -139,12 +172,26 @@ public class WeiboMcpService {
 
     @PreDestroy
     public synchronized void close() {
+        for (var tool : businessTools) {
+            toolkit.removeTool(tool.getName());
+        }
         if (client != null) {
             toolkit.removeMcpClient("weibo-mcp").block(Duration.ofSeconds(10));
             client = null;
         }
         businessTools = java.util.List.of();
         toolCount = 0;
+    }
+
+    private String bearer() {
+        if (credentials == null) {
+            throw new IllegalStateException("微博出站被沙箱拒绝");
+        }
+        try {
+            return credentials.materializeCurrent("weibo");
+        } catch (RuntimeException failure) {
+            throw new IllegalStateException("微博出站被沙箱拒绝");
+        }
     }
 
     public record Status(boolean enabled, boolean authorized, boolean connected, int toolCount, String error) { }

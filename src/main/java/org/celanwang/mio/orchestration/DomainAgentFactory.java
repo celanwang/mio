@@ -10,6 +10,8 @@ import io.agentscope.core.tool.*;
 import io.agentscope.extensions.judge.jev.JevClient;
 import org.celanwang.mio.memory.*;
 import org.celanwang.mio.model.dto.ChatRequest;
+import org.celanwang.mio.sandbox.SandboxExecutor;
+import org.celanwang.mio.sandbox.SandboxedTool;
 import org.celanwang.mio.security.*;
 import org.celanwang.mio.service.*;
 import org.celanwang.mio.trace.TraceStore;
@@ -49,7 +51,8 @@ public final class DomainAgentFactory implements TaskWorker {
         for(ToolBase tool:definition.tools().get()){
             if(tool.getName().startsWith("mio_"))throw new IllegalStateException("领域工具使用了保留名称");
             if(!names.add(tool.getName()))throw new IllegalStateException("领域工具名称重复");
-            var wrapped=new GuardedDomainTool(tool,execution,policy,definition::checkAvailability,declaredWrites.contains(tool.getName()));
+            ToolBase effective=tool instanceof SandboxedTool||sandbox==null?tool:new SandboxedTool(tool,sandbox,null);
+            var wrapped=new GuardedDomainTool(effective,execution,policy,definition::checkAvailability,declaredWrites.contains(tool.getName()));
             var existing=toolkit.getTool(tool.getName());
             if(existing==null||!ToolContract.hash(existing).equals(ToolContract.hash(wrapped))) toolkit.registerAgentTool(wrapped);
         }
@@ -58,7 +61,9 @@ public final class DomainAgentFactory implements TaskWorker {
     }
     private org.celanwang.mio.memory.PersonalContext personal;
     private Set<String> declaredWrites=Set.of();
+    private SandboxExecutor sandbox;
     public DomainAgentFactory withDeclaredWrites(Set<String> tools){this.declaredWrites=Set.copyOf(tools);return this;}
+    public DomainAgentFactory withSandbox(SandboxExecutor sandbox){this.sandbox=sandbox;return this;}
     public DomainAgentFactory withPersonalContext(org.celanwang.mio.memory.PersonalContext personal){this.personal=personal;return this;}
     private org.springframework.jdbc.core.JdbcTemplate selectedContext;
     public DomainAgentFactory withSelectedContext(org.springframework.jdbc.core.JdbcTemplate jdbc){this.selectedContext=jdbc;return this;}

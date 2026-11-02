@@ -29,7 +29,7 @@ final class GuardedDomainTool extends ToolBase implements ToolContract.SourceBou
         this.declaredWrite=declaredWrite;
     }
     @Override public AgentTool contractSource(){return delegate;}
-    static boolean readOnly(ToolBase tool,Map<String,Object> input){
+    public static boolean readOnly(ToolBase tool,Map<String,Object> input){
         if(ToolPolicies.HUMAN_ONLY.contains(tool.getName()))return false;
         if(tool.getName().equals("tencent_ride"))return Set.of("preflight","get-resident-city","addr-keys","addr-get-value",
                 "short-cut-keys","short-cut-get-value","poi-search","select-poi","estimate-price","query-ongoing-order",
