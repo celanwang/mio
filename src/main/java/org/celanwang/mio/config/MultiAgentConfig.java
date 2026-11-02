@@ -7,6 +7,8 @@ import io.agentscope.core.tool.*;
 import io.agentscope.extensions.judge.jev.JevClient;
 import org.celanwang.mio.memory.*;
 import org.celanwang.mio.orchestration.*;
+import org.celanwang.mio.sandbox.SandboxExecutor;
+import org.celanwang.mio.sandbox.SandboxedTool;
 import org.celanwang.mio.security.PolicyEngine;
 import org.celanwang.mio.service.*;
 import org.celanwang.mio.tool.*;
@@ -51,15 +53,20 @@ public class MultiAgentConfig {
         return definition("mcd-ordering","餐饮助手","麦当劳菜单、门店、优惠、算价、点餐准备与经确认的订单操作。",dir,
                 ()->source.getToolNames().stream().map(name->{var tool=source.getTool(name);if(!(tool instanceof ToolBase base))throw new IllegalStateException("业务工具必须保持 ToolBase 权限边界");return base;}).toList());
     }
-    @Bean DomainDefinition rideDomain(TencentRideService service,@Value("${app.agent.skills-dir:./skills}")String dir){
+    @Bean DomainDefinition rideDomain(TencentRideService service,ObjectProvider<SandboxExecutor> sandbox,@Value("${app.agent.skills-dir:./skills}")String dir){
+        SandboxExecutor executor=sandbox.getIfAvailable();
         var domain=definition("tencent-ride","出行助手","腾讯即时出行的地点确认、询价、当前订单查询、经人工确认的叫车与取消。",dir,
-                ()->List.of(new TencentRideTool(service),new TencentRideCreateOrderTool(service)),
+                ()->List.of(new TencentRideTool(service,executor),new TencentRideCreateOrderTool(service,executor)),
                 List.of(CapabilityOutputContract.report(),CapabilityOutputContract.rideQuote(),CapabilityOutputContract.resourceReference()));
         return new DomainDefinition(domain.capability(),domain.prompt(),domain.tools(),service::availability);
     }
-    @Bean DomainDefinition weiboDomain(WeiboMcpService service,@Value("${app.agent.skills-dir:./skills}")String dir){
+    @Bean DomainDefinition weiboDomain(WeiboMcpService service,ObjectProvider<SandboxExecutor> sandbox,@Value("${app.agent.skills-dir:./skills}")String dir){
+        SandboxExecutor executor=sandbox.getIfAvailable();
         var domain=definition("weibo-assistant","微博助手","微博授权准备、已注册接口范围内的查询与内容处理，指定互动仍需确认。",dir,()->{
-            var tools=new ArrayList<ToolBase>();tools.add(new WeiboConnectionTool(service));tools.addAll(service.businessTools());return tools;
+            var tools=new ArrayList<ToolBase>();
+            ToolBase prepare=new WeiboConnectionTool(service);
+            tools.add(executor==null?prepare:new SandboxedTool(prepare,executor,"weibo"));
+            tools.addAll(service.businessTools());return tools;
         });
         return new DomainDefinition(domain.capability(),domain.prompt(),domain.tools(),service::availability);
     }
@@ -104,8 +111,8 @@ public class MultiAgentConfig {
     @Bean DomainAgentFactory domainAgentFactory(List<DomainDefinition> builtins,org.celanwang.mio.goals.CapabilityPackages packages,@Qualifier("dashScopePlusModel")Model model,
             JdbcAgentStateStore states,AgentSkillRepository skills,PolicyEngine policy,WeiboMcpService weibo,ObjectProvider<JevClient> jev,
             @Value("${app.jev.auto-approve-threshold:0.8}")double threshold,TraceStore traces,TrustStore trust,MioLongTermMemory memory,
-            HabitDetector habits,ProfileStore profiles,ObjectMapper json,PersonalContext personal,EvidenceAdapters adapters,JdbcTemplate jdbc){
-        return new DomainAgentFactory(adapters.decorate(packages.combine(builtins)),c->model,states,skills,policy,weibo,jev,threshold,traces,trust,memory,habits,profiles,json).withPersonalContext(personal).withSelectedContext(jdbc).withDeclaredWrites(adapters.writes());
+            HabitDetector habits,ProfileStore profiles,ObjectMapper json,PersonalContext personal,EvidenceAdapters adapters,JdbcTemplate jdbc,ObjectProvider<SandboxExecutor> sandbox){
+        return new DomainAgentFactory(adapters.decorate(packages.combine(builtins)),c->model,states,skills,policy,weibo,jev,threshold,traces,trust,memory,habits,profiles,json).withPersonalContext(personal).withSelectedContext(jdbc).withDeclaredWrites(adapters.writes()).withSandbox(sandbox.getIfAvailable());
     }
     @Bean FactExtractor tencentQuoteFactExtractor(){return new TencentQuoteFactExtractor();}
     @Bean OperationVerifier tencentOrderReceiptVerifier(){return new TencentOrderReceiptVerifier();}

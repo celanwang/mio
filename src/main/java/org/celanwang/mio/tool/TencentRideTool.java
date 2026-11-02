@@ -1,5 +1,8 @@
 package org.celanwang.mio.tool;
 
+import org.celanwang.mio.sandbox.ExecutionTicket;
+import org.celanwang.mio.sandbox.SandboxExecutor;
+import org.celanwang.mio.sandbox.SandboxScope;
 import org.celanwang.mio.service.TencentRideService;
 import io.agentscope.core.message.ToolResultBlock;
 import io.agentscope.core.permission.PermissionContextState;
@@ -23,8 +26,13 @@ public class TencentRideTool extends ToolBase {
     private static final Set<String> CONFIRM = Set.of("cancel-order", "delete-state",
             "set-resident-city", "addr-upsert-value", "short-cut-upsert-value");
     private final TencentRideService service;
+    private final SandboxExecutor sandbox;
 
     public TencentRideTool(TencentRideService service) {
+        this(service, null);
+    }
+
+    public TencentRideTool(TencentRideService service, SandboxExecutor sandbox) {
         super(ToolBase.builder().name(NAME)
                 .description("腾讯出行打车查询和行程工具：先读取 tencent-ride 技能及 references/project-integration.md。command 选择固定操作，parameters 是该命令参数对象，不接受 shell、文件路径或 Token。首次使用 preflight，常住城市可不设置；主动询问本次城市、上车点和目的地，poi-search 必须携带已确认的 city_name。地点确定后询价并展示真实里程、时长、车型和金额；只询价不下单。创建订单必须使用独立工具 tencent_ride_create_order；本工具不接受 create-order 命令。query-order 可查询真实订单状态、司机姓名和车牌，未分配司机时如实说明；query-driver-location 查询司机位置。cancel-order 须先 check-cancel-fee，再带真实 orderId 与 amountFen，summary 填写订单和取消费用。取消和保存偏好由用户确认。不提供付款二维码，支付按真实订单状态到腾讯出行服务小程序处理。")
                 .inputSchema(Map.of("type", "object", "properties", Map.of(
@@ -35,6 +43,7 @@ public class TencentRideTool extends ToolBase {
                         "required", List.of("command"), "additionalProperties", false))
                 .readOnly(false).concurrencySafe(false));
         this.service = service;
+        this.sandbox = sandbox;
     }
 
     public static boolean isSupported(Object command) { return "create-order".equals(command) || COMMANDS.contains(command); }
@@ -52,12 +61,27 @@ public class TencentRideTool extends ToolBase {
 
     @Override
     public Mono<ToolResultBlock> callAsync(ToolCallParam call) {
-        return Mono.fromCallable(() -> {
-            if ("create-order".equals(call.getInput().get("command"))) {
-                return ToolResultBlock.text("下单必须使用 tencent_ride_create_order。当前调用没有创建订单。");
+        ExecutionTicket existing = SandboxScope.currentTicket().orElse(null);
+        if (existing == null && sandbox == null) {
+            return Mono.fromCallable(() -> ToolResultBlock.text(invoke(call, null))).subscribeOn(Schedulers.boundedElastic());
+        }
+        if (existing != null) {
+            return Mono.fromCallable(() -> ToolResultBlock.text(invoke(call, existing))).subscribeOn(Schedulers.boundedElastic());
+        }
+        return sandbox.guardCall(call, this, "tencent-ride", ticket -> {
+            try {
+                return invoke(call, ticket);
+            } catch (java.io.IOException failure) {
+                throw new IllegalStateException(failure);
             }
-            String session = call.getRuntimeContext() == null ? null : call.getRuntimeContext().getSessionId();
-            return ToolResultBlock.text(service.execute(session, call.getInput()));
-        }).subscribeOn(Schedulers.boundedElastic());
+        });
+    }
+
+    private String invoke(ToolCallParam call, ExecutionTicket ticket) throws java.io.IOException {
+        if ("create-order".equals(call.getInput().get("command"))) {
+            return "下单必须使用 tencent_ride_create_order。当前调用没有创建订单。";
+        }
+        String session = call.getRuntimeContext() == null ? null : call.getRuntimeContext().getSessionId();
+        return ticket == null ? service.execute(session, call.getInput()) : service.execute(session, call.getInput(), ticket);
     }
 }

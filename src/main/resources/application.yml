@@ -92,7 +92,18 @@ app:
     # 接口最小鉴权：/chat 与 /api/** 仅允许本机回环访问。
     local-only: ${MIO_SECURITY_LOCAL_ONLY:true}
     # 权限裁决模式：shadow 只留痕不改变行为；enforce 安装硬编码 DENY 规则。
+    # 沙箱不改变这一档位。
     policy-mode: ${MIO_SECURITY_POLICY_MODE:shadow}
+
+  sandbox:
+    # 主体工作区根目录。默认主体仍是 local-owner；接口接受其他主体标识，但不把产品改成多租户。
+    root: ${MIO_SANDBOX_ROOT:.mio/sandbox}
+    principal: ${MIO_SANDBOX_PRINCIPAL:local-owner}
+    # 默认关闭。打开后容器路径仍拒绝执行，直到 gVisor 接缝真正落地；不会回退到宿主机。
+    container-enabled: ${MIO_SANDBOX_CONTAINER_ENABLED:false}
+    container-runtime: ${MIO_SANDBOX_CONTAINER_RUNTIME:}
+    bwrap: ${MIO_SANDBOX_BWRAP:bwrap}
+    ticket-ttl: ${MIO_SANDBOX_TICKET_TTL:2m}
 
   memory:
     jobs:
