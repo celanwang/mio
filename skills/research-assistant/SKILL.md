@@ -1,5 +1,6 @@
 ---
 name: research-assistant
+aliases: [资料检索, 网页搜索, 信息研究, 研究报告]
 description: 使用用户导入文档与配置的公开搜索整理资料、比较方案并标注来源。
 ---
 

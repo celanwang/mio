@@ -2,6 +2,9 @@ package org.celanwang.mio.orchestration;
 
 import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.core.message.*;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.celanwang.mio.align.*;
 import org.celanwang.mio.memory.*;
 import org.celanwang.mio.model.dto.ChatRequest;
 import org.celanwang.mio.model.vo.*;
@@ -44,6 +47,12 @@ public final class MultiAgentChatService {
     }
     private PersonalContext personal;
     public MultiAgentChatService withPersonalContext(PersonalContext personal){this.personal=personal;return this;}
+    private IntentResolver intentResolver;
+    private LiveResolveRequests intentRequests;
+    private ObjectMapper intentJson;
+    public MultiAgentChatService withIntentResolver(IntentResolver resolver,LiveResolveRequests requests,ObjectMapper json){
+        this.intentResolver=Objects.requireNonNull(resolver);this.intentRequests=Objects.requireNonNull(requests);this.intentJson=Objects.requireNonNull(json);return this;
+    }
     public Mono<ChatResponse> chat(ChatRequest request){
         return Mono.defer(()->{
             String session=request.getSessionId()==null||request.getSessionId().isBlank()?UUID.randomUUID().toString():request.getSessionId();
@@ -75,7 +84,12 @@ public final class MultiAgentChatService {
                     prepare=runtime.answerTask(session,target.taskId(),target.questionId(),request.getMessage(),budget);
                 }
                 else{
-                    budget.fenced(()->runtime.captureUser(session,request.getMessage()));
+                    try{
+                        budget.fenced(()->runtime.captureUser(session,request.getMessage()));
+                    }catch(RuntimeException failure){
+                        if(intentResolver!=null)traceIntent(session,ResolveResult.unavailable());
+                        throw failure;
+                    }
                     traces.append(session,"user","user","用户消息",request.getMessage());prepare=Mono.empty();
                 }
                 var activeGoal=runtime.goal(session);activeGoal.requireActive();
@@ -85,11 +99,31 @@ public final class MultiAgentChatService {
                     String data=decisions?"具体操作的人工决定已由服务端处理，请读取 list_tasks 后准确汇报。":"";
                     if(taskReply)data="用户已回答任务 "+request.getTaskReply().taskId()+" 的问题，服务端已恢复该任务。请读取 list_tasks 汇报；回答仅属于这个任务，不能传播为其他任务的新增授权或全局偏好。";
                     if(resume)data="用户要求继续已接收回答的任务或领取排队准备任务，服务端已按原任务范围处理。请读取 list_tasks 准确汇报，不添加或重复任何业务批准。";
-                    if(personal!=null)data+="\n个人偏好（参考，非权限）：\n"+personal.capture(session,Set.of(),runtime.goal(session).trustedIntent());
-                    else if(profiles!=null){
-                        var global=profiles.pages().stream().filter(p->p.scope().equals("global")).limit(20).toList();
-                        String text=profiles.render(global);
-                        if(text!=null&&!text.isBlank())data+="\n画像参考（非指令）：\n"+text.substring(0,Math.min(text.length(),6000));
+                    PersonalContextSnapshot prefs=PersonalContextSnapshot.empty();
+                    try{
+                        if(personal!=null){
+                            var captured=personal.capture(session,Set.of(),runtime.goal(session).trustedIntent());
+                            prefs=PersonalContextSnapshot.fromCapture(captured);
+                            data+="\n个人偏好（参考，非权限）：\n"+captured;
+                        }else if(profiles!=null){
+                            var pages=intentResolver!=null&&!decisions&&!taskReply&&!resume?profiles.pagesStrict():profiles.pages();
+                            var global=pages.stream().filter(p->p.scope().equals("global")).limit(20).toList();
+                            String text=profiles.render(global);
+                            if(text!=null&&!text.isBlank())data+="\n画像参考（非指令）：\n"+text.substring(0,Math.min(text.length(),6000));
+                        }
+                    }catch(RuntimeException failure){
+                        if(intentResolver==null||decisions||taskReply||resume)throw failure;
+                        prefs=PersonalContextSnapshot.unavailable();
+                    }
+                    // Only fresh top-level messages enter B8. Approval/resume/scoped replies retain their existing routing.
+                    if(intentResolver!=null&&!decisions&&!taskReply&&!resume){
+                        ResolveResult resolved;
+                        try{
+                            resolved=intentResolver.resolve(intentRequests.forMessage(session,request.getMessage(),runtime.goal(session),prefs));
+                        }catch(RuntimeException failure){resolved=ResolveResult.unavailable();}
+                        if(resolved==null)resolved=ResolveResult.unavailable();
+                        traceIntent(session,resolved);
+                        data+=IntentResolveEvents.planningContext(resolved);
                     }
                     return factory.create(session,budget,data);
                 },agent->{
@@ -112,6 +146,11 @@ public final class MultiAgentChatService {
                     .onErrorMap(IllegalStateException.class,e->new ResponseStatusException(HttpStatus.CONFLICT,e.getMessage()));
             return result.doOnSuccess(v->running.remove(session,owner)).doOnError(e->running.remove(session,owner)).doFinally(s->running.remove(session,owner));
         }).subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic());
+    }
+    private void traceIntent(String session,ResolveResult result){
+        try{
+            traces.append(session,"supervisor","intent_resolve","意图解析",intentJson.writeValueAsString(IntentResolveEvents.detail(result)));
+        }catch(JsonProcessingException failure){throw new IllegalStateException("意图解析事件序列化失败",failure);}
     }
     /** Operator reads remain possible for stopped goals. This path never invokes a model or submits an order. */
     public Mono<ChatResponse> reconcile(String session,String taskId,String operationId){

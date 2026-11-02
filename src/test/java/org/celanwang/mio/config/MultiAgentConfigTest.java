@@ -23,12 +23,14 @@ class MultiAgentConfigTest {
         new ApplicationContextRunner().withUserConfiguration(MultiAgentConfig.class)
                 .withPropertyValues("app.multi-agent.enabled=false").run(context->{
                     assertThat(context).doesNotHaveBean(TaskRuntime.class).doesNotHaveBean(JdbcAgentStateStore.class);
+                    assertThat(context).doesNotHaveBean(org.celanwang.mio.align.IntentResolver.class);
                 });
     }
     @Test void enabledModeWiresBusinessAndKnowledgeDomainsWithoutStartingExternalServices(){
         new ApplicationContextRunner().withUserConfiguration(Dependencies.class,MultiAgentConfig.class)
                 .withPropertyValues("app.multi-agent.enabled=true").run(context->{
                     assertThat(context).hasSingleBean(TaskRuntime.class).hasSingleBean(MultiAgentChatService.class);
+                    assertThat(context).hasSingleBean(org.celanwang.mio.align.IntentResolver.class).hasSingleBean(org.celanwang.mio.align.LiveResolveRequests.class);
                     assertThat(context.getBean(AgentRegistry.class).list().stream().map(AgentCapability::id).toList())
                             .containsExactlyInAnyOrder("mcd-ordering","tencent-ride","weibo-assistant","research-assistant","document-assistant");
                     var budget=new RunBudget(new RunBudget.Limits(2,2,2,1000,10000,1000),Clock.systemUTC());
@@ -70,6 +72,8 @@ class MultiAgentConfigTest {
         @Bean org.celanwang.mio.memory.jobs.JdbcMemoryUsage usage(){return mock(org.celanwang.mio.memory.jobs.JdbcMemoryUsage.class);}
         @Bean ProfileStore profiles(){return mock(ProfileStore.class);}
         @Bean PersonalContext personal(){return mock(PersonalContext.class);}
+        @Bean DomainAliasRegistry aliases(){return new DomainAliasRegistry("./skills");}
+        @Bean EntityStore entities(){return mock(EntityStore.class);}
         @Bean org.celanwang.mio.align.ValueConflictAdvisor align(){
             return org.celanwang.mio.align.ValueConflictAdvisor.baseline();
         }
