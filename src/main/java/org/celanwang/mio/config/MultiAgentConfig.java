@@ -31,6 +31,10 @@ import java.util.*;
 @Configuration
 @ConditionalOnProperty(prefix="app.multi-agent",name="enabled",havingValue="true")
 public class MultiAgentConfig {
+    @Bean org.celanwang.mio.align.IntentResolver intentResolver(){return new org.celanwang.mio.align.DeterministicIntentResolver();}
+    @Bean org.celanwang.mio.align.LiveResolveRequests intentResolveRequests(AgentRegistry registry,DomainAliasRegistry aliases,EntityStore entities){
+        return new org.celanwang.mio.align.LiveResolveRequests(registry,aliases,entities);
+    }
     private DomainDefinition definition(String id,String name,String description,String skillsDir,java.util.function.Supplier<List<ToolBase>> tools){
         return definition(id,name,description,skillsDir,tools,List.of(CapabilityOutputContract.report()));
     }
@@ -132,8 +136,9 @@ public class MultiAgentConfig {
             @Value("${app.multi-agent.max-context-characters:100000}")int context,@Value("${app.multi-agent.timeout-ms:150000}")long millis,
             @Value("${app.multi-agent.goal-max-model-calls:160}")int goalModels,@Value("${app.multi-agent.goal-max-tool-calls:320}")int goalTools,
             @Value("${app.multi-agent.goal-max-task-calls:48}")int goalTasks,@Value("${app.multi-agent.goal-max-tokens:320000}")long goalTokens,
-            TraceStore traces,MioLongTermMemory memory,ProfileStore profiles,JdbcGoalBudgetStore budgets,JdbcExecutionLeaseStore leases,JdbcGoalAcceptance acceptance,org.springframework.core.env.Environment env,PersonalContext personal){
+            TraceStore traces,MioLongTermMemory memory,ProfileStore profiles,JdbcGoalBudgetStore budgets,JdbcExecutionLeaseStore leases,JdbcGoalAcceptance acceptance,org.springframework.core.env.Environment env,PersonalContext personal,
+            org.celanwang.mio.align.IntentResolver intentResolver,org.celanwang.mio.align.LiveResolveRequests intentRequests,ObjectMapper json){
         return new MultiAgentChatService(factory,runtime,registry,new org.celanwang.mio.ops.ExecutionSettings(env).foreground(),
-                Clock.systemUTC(),traces,memory,profiles,budgets,new org.celanwang.mio.ops.ExecutionSettings(env).goal(),leases,acceptance).withPersonalContext(personal);
+                Clock.systemUTC(),traces,memory,profiles,budgets,new org.celanwang.mio.ops.ExecutionSettings(env).goal(),leases,acceptance).withPersonalContext(personal).withIntentResolver(intentResolver,intentRequests,json);
     }
 }

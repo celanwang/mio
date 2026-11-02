@@ -15,6 +15,22 @@ public interface EntityStore {
     /** 查某个实体的全部有效三元组。 */
     List<Triple> related(String entity);
 
+    /** Read health for planning consumers; a failed read is not an empty entity book. */
+    default RelatedSnapshot relatedSnapshot(String entity) {
+        try {
+            List<Triple> hits = related(entity);
+            return hits == null ? new RelatedSnapshot(false, List.of()) : new RelatedSnapshot(true, hits);
+        } catch (RuntimeException failure) {
+            return new RelatedSnapshot(false, List.of());
+        }
+    }
+
+    record RelatedSnapshot(boolean available, List<Triple> triples) {
+        public RelatedSnapshot {
+            triples = available ? List.copyOf(triples) : List.of();
+        }
+    }
+
     /** 全部有效三元组（面板观察用）。 */
     List<Triple> all();
 

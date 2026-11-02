@@ -68,12 +68,17 @@ public class PgEntityStore implements EntityStore {
 
     @Override
     public List<Triple> related(String entity) {
+        return relatedSnapshot(entity).triples();
+    }
+
+    @Override
+    public RelatedSnapshot relatedSnapshot(String entity) {
         try {
-            return jdbc.query(SELECT_VALID + " WHERE subject = ? AND valid_to IS NULL ORDER BY id",
-                    this::mapRow, entity);
+            return new RelatedSnapshot(true, jdbc.query(SELECT_VALID + " WHERE subject = ? AND valid_to IS NULL ORDER BY id",
+                    this::mapRow, entity));
         } catch (Exception e) {
             log.warn("实体三元组查询失败（fail-open，按空处理）：{}", e.getMessage());
-            return List.of();
+            return new RelatedSnapshot(false, List.of());
         }
     }
 

@@ -1,5 +1,6 @@
 ---
 name: document-assistant
+aliases: [文档, 文稿, 改写, 文档摘要]
 description: 阅读用户导入文档，整理、比较、改写并在任务回复中交付文稿。
 ---
 

@@ -24,6 +24,7 @@ public class DomainAliasRegistry {
     private static final Logger log = LoggerFactory.getLogger(DomainAliasRegistry.class);
 
     private final Map<String, Set<String>> aliasesByDomain;
+    private boolean available = true;
 
     public DomainAliasRegistry(@Value("${app.agent.skills-dir:./skills}") String skillsDir) {
         this.aliasesByDomain = scan(expandHome(skillsDir));
@@ -43,19 +44,26 @@ public class DomainAliasRegistry {
         return aliasesByDomain.getOrDefault(domain, Set.of());
     }
 
+    /** B8 must distinguish a successful empty lookup from an unreadable skill source. */
+    public boolean available() { return available; }
+
+    public Set<String> skillNames() { return Set.copyOf(aliasesByDomain.keySet()); }
+
     private Map<String, Set<String>> scan(Path skillsDir) {
         Map<String, Set<String>> result = new HashMap<>();
         if (!Files.isDirectory(skillsDir)) {
+            available = false;
             return result;
         }
         try (var stream = Files.list(skillsDir)) {
-            for (Path dir : stream.filter(Files::isDirectory).toList()) {
+            for (Path dir : stream.filter(Files::isDirectory).sorted().toList()) {
                 Path skillFile = dir.resolve("SKILL.md");
                 if (Files.exists(skillFile)) {
                     parseSkill(skillFile, result);
                 }
             }
         } catch (Exception e) {
+            available = false;
             log.warn("技能目录扫描失败（领域别名为空）：{}", e.getMessage());
         }
         return result;
@@ -66,13 +74,16 @@ public class DomainAliasRegistry {
         try {
             List<String> lines = Files.readAllLines(skillFile);
             if (lines.isEmpty() || !lines.get(0).trim().equals("---")) {
+                available = false;
                 return;
             }
             String name = null;
             Set<String> aliases = Set.of();
+            boolean closed = false;
             for (int i = 1; i < lines.size(); i++) {
                 String line = lines.get(i).trim();
                 if (line.equals("---")) {
+                    closed = true;
                     break;
                 }
                 if (line.startsWith("name:")) {
@@ -81,10 +92,13 @@ public class DomainAliasRegistry {
                     aliases = parseInlineList(line.substring("aliases:".length()).trim());
                 }
             }
-            if (name != null && !name.isEmpty() && !aliases.isEmpty()) {
-                out.put(name, aliases);
+            if (closed && name != null && !name.isEmpty()) {
+                if (out.putIfAbsent(name, Set.copyOf(aliases)) != null) available = false;
+            } else {
+                available = false;
             }
         } catch (Exception e) {
+            available = false;
             log.warn("解析技能别名失败（跳过 {}）：{}", skillFile, e.getMessage());
         }
     }
