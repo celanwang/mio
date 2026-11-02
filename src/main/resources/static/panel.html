@@ -98,6 +98,10 @@ aside{width:264px;flex-shrink:0;border-right:1px solid var(--border);overflow-y:
 .event.jev::before{background:var(--blue)}
 .event.confirm::before{background:var(--yellow)}
 .event.ask::before{background:var(--pink)}
+.event.sandbox_started::before{background:var(--green)}
+.event.sandbox_refused::before{background:var(--pink)}
+.event.sandbox_unavailable::before{background:var(--amber)}
+.event.sandbox_admit::before,.event.sandbox_egress::before,.event.sandbox_finish::before{background:var(--blue)}
 .event-card{background:var(--panel);border:1px solid var(--border);border-radius:var(--r-md);padding:12px 15px;box-shadow:var(--shadow-sm)}
 .event .head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
 .badge{font-size:11px;padding:2px 9px;border-radius:999px;background:var(--hover);color:var(--secondary)}
@@ -108,6 +112,10 @@ aside{width:264px;flex-shrink:0;border-right:1px solid var(--border);overflow-y:
 .event.jev .badge{background:color-mix(in srgb,var(--blue) 15%,transparent);color:var(--blue)}
 .event.confirm .badge{background:color-mix(in srgb,var(--yellow) 16%,transparent);color:var(--yellow)}
 .event.ask .badge{background:color-mix(in srgb,var(--pink) 14%,transparent);color:var(--pink)}
+.event.sandbox_started .badge{background:color-mix(in srgb,var(--green) 15%,transparent);color:var(--green)}
+.event.sandbox_refused .badge{background:color-mix(in srgb,var(--pink) 14%,transparent);color:var(--pink)}
+.event.sandbox_unavailable .badge{background:color-mix(in srgb,var(--amber) 15%,transparent);color:var(--amber)}
+.event.sandbox_admit .badge,.event.sandbox_egress .badge,.event.sandbox_finish .badge{background:color-mix(in srgb,var(--blue) 15%,transparent);color:var(--blue)}
 .event .title{font-size:14px;font-weight:600}
 .event .time{font-size:11px;color:var(--muted);font-family:var(--font-mono)}
 .event details{margin-top:8px}
@@ -123,7 +131,7 @@ aside{width:264px;flex-shrink:0;border-right:1px solid var(--border);overflow-y:
 .g-node{fill:var(--code);stroke-width:1.5}
 .g-name{fill:var(--text);font-size:13px;font-weight:600}
 .g-count{fill:var(--muted);font-size:10px}
-.nk-user{stroke:var(--cyan)}.nk-qwen{stroke:var(--purple)}.nk-tool{stroke:var(--amber)}.nk-jev{stroke:var(--blue)}.nk-human{stroke:var(--yellow)}
+.nk-user{stroke:var(--cyan)}.nk-qwen{stroke:var(--purple)}.nk-tool{stroke:var(--amber)}.nk-jev{stroke:var(--blue)}.nk-human{stroke:var(--yellow)}.nk-sandbox{stroke:var(--blue)}
 
 /* 画像：分区卡片 + 表格 */
 #profile{flex:1;overflow-y:auto;padding:22px 28px;display:none}
@@ -250,7 +258,7 @@ async function loadSessions() {
   }
 }
 
-const TYPE_LABEL = { user: '用户', model: 'Qwen 模型', tool_call: 'Qwen · 工具调用', tool_result: 'MCP 工具返回', jev: 'Jev 模型', confirm: '人工确认', ask: '待确认' };
+const TYPE_LABEL = { user: '用户', model: 'Qwen 模型', tool_call: 'Qwen · 工具调用', tool_result: 'MCP 工具返回', jev: 'Jev 模型', confirm: '人工确认', ask: '待确认', sandbox_admit: '沙箱准入', sandbox_started: '沙箱启动', sandbox_refused: '沙箱拒绝', sandbox_unavailable: '沙箱不可用', sandbox_egress: '沙箱出站', sandbox_finish: '沙箱结束' };
 
 async function loadEvents() {
   if (!activeSession) return;
@@ -414,7 +422,7 @@ function renderTimeline(events) {
 
 /* ---------- 链路图 ---------- */
 
-const NODE_LABEL = { user: '用户', qwen: 'Qwen 模型', jev: 'Jev 模型', human: '人工确认' };
+const NODE_LABEL = { user: '用户', qwen: 'Qwen 模型', jev: 'Jev 模型', human: '人工确认', sandbox: '沙箱' };
 
 function nodeKind(id) {
   return id.startsWith('tool:') ? 'tool' : id;
@@ -453,6 +461,7 @@ function layoutNodes(nodes, height) {
     else if (kind === 'qwen') pos[n.id] = { x: 370, y: midY };
     else if (kind === 'jev') pos[n.id] = { x: 370, y: height - 100 };
     else if (kind === 'human') pos[n.id] = { x: 640, y: height - 100 };
+    else if (kind === 'sandbox') pos[n.id] = { x: 100, y: height - 100 };
   }
   tools.forEach((n, i) => {
     const step = Math.min(90, (height - 180) / Math.max(tools.length, 1));

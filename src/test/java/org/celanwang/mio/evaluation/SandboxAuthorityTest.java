@@ -93,13 +93,20 @@ class SandboxAuthorityTest {
         assertThat(world.processes.lastCommand()).noneMatch(arg -> arg.contains(TOKEN));
         assertThat(second).contains("未回退到宿主机");
         var events = world.traces.events(session);
-        assertThat(events).anyMatch(event -> "sandbox_admit".equals(event.type()) && event.detail().contains("ticket=" + ticket.id()));
-        assertThat(events).anyMatch(event -> "sandbox_refuse".equals(event.type()) && event.title().contains("TICKET_REUSED"));
+        assertThat(events).anyMatch(event -> "sandbox_admit".equals(event.type())
+                && event.detail().contains("\"ticket_id\":\"" + ticket.id() + "\""));
+        assertThat(events).anyMatch(event -> "sandbox_refused".equals(event.type()) && event.title().contains("TICKET_REUSED"));
+        var started = events.stream().filter(event -> "sandbox_started".equals(event.type())).findFirst().orElseThrow();
+        var startedDetail = new ObjectMapper().readTree(started.detail());
+        assertThat(startedDetail.get("schemaVersion").asInt()).isEqualTo(1);
+        assertThat(startedDetail.get("process_started").asBoolean()).isTrue();
+        assertThat(startedDetail.get("callId").asText()).isEqualTo("order-1");
+        assertThat(startedDetail.get("joinKey").asText()).startsWith("jk1|");
         assertThat(text(events)).doesNotContain(TOKEN);
         var row = SandboxAuthorityObservations.row("ticket-reuse-refuse", "subprocess");
         row.put("admitted", true);
         row.put("ticket_id", ticket.id());
-        row.put("sandbox_event", "sandbox_refuse");
+        row.put("sandbox_event", "sandbox_refused");
         row.put("trace_events", types(events));
         row.put("process_starts", world.processes.launches);
         row.put("effect_success", false);
@@ -148,13 +155,18 @@ class SandboxAuthorityTest {
         var events = world.traces.events(session);
         assertThat(events).anySatisfy(event -> {
             assertThat(event.node()).isEqualTo("sandbox");
-            assertThat(event.type()).isEqualTo("sandbox_refuse");
+            assertThat(event.type()).isEqualTo("sandbox_refused");
             assertThat(event.title()).contains("TICKET_REQUIRED");
+            var node = new ObjectMapper().readTree(event.detail());
+            assertThat(node.get("schemaVersion").asInt()).isEqualTo(1);
+            assertThat(node.get("refuse_code").asText()).isEqualTo("TICKET_REQUIRED");
+            assertThat(node.get("ticket_id").isNull()).isTrue();
+            assertThat(node.get("joinKey").asText()).startsWith("jk1|");
         });
         assertThat(events).noneMatch(event -> "sandbox_admit".equals(event.type()));
         assertThat(text(events)).doesNotContain(TOKEN);
         var row = SandboxAuthorityObservations.row("sandbox_refuse-audited", "trace");
-        row.put("sandbox_event", "sandbox_refuse");
+        row.put("sandbox_event", "sandbox_refused");
         row.put("trace_events", types(events));
         SandboxAuthorityObservations.export(List.of(row));
     }
@@ -226,8 +238,8 @@ class SandboxAuthorityTest {
 
     private static Map<String, Object> refusedShape(String sample) throws Exception {
         var row = SandboxAuthorityObservations.row("no-ticket-refuse", sample);
-        row.put("sandbox_event", "sandbox_refuse");
-        row.put("trace_events", List.of("sandbox_refuse"));
+        row.put("sandbox_event", "sandbox_refused");
+        row.put("trace_events", List.of("sandbox_refused"));
         return row;
     }
 
@@ -237,10 +249,10 @@ class SandboxAuthorityTest {
                 .extracting(error -> ((SandboxRefusedException) error).code())
                 .isEqualTo("TICKET_REQUIRED");
         var events = world.traces.events(admission.sessionId());
-        assertThat(types(events)).containsExactly("sandbox_refuse");
+        assertThat(types(events)).containsExactly("sandbox_refused");
         assertThat(text(events)).doesNotContain(TOKEN);
         var row = SandboxAuthorityObservations.row("no-ticket-refuse", sample);
-        row.put("sandbox_event", "sandbox_refuse");
+        row.put("sandbox_event", "sandbox_refused");
         row.put("trace_events", types(events));
         row.put("process_starts", 0);
         row.put("effect_success", false);
@@ -253,10 +265,10 @@ class SandboxAuthorityTest {
         assertThat(result).contains("缺少执行票据");
         assertThat(world.processes.launches).isEqualTo(before);
         var events = world.traces.events(session);
-        assertThat(types(events)).containsExactly("sandbox_refuse");
+        assertThat(types(events)).containsExactly("sandbox_refused");
         assertThat(text(events)).doesNotContain(TOKEN);
         var row = SandboxAuthorityObservations.row("no-ticket-refuse", sample);
-        row.put("sandbox_event", "sandbox_refuse");
+        row.put("sandbox_event", "sandbox_refused");
         row.put("trace_events", types(events));
         row.put("process_starts", 0);
         row.put("effect_success", false);

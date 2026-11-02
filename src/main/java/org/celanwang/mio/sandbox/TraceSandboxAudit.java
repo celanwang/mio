@@ -15,6 +15,8 @@ public class TraceSandboxAudit implements SandboxAudit {
     @Override
     public void record(SandboxEvent event) {
         String session = event.sessionId() == null || event.sessionId().isBlank() ? "sandbox" : event.sessionId();
-        traces.append(session, "sandbox", event.type(), event.code() + " " + event.tool(), event.detail());
+        long timestamp = System.currentTimeMillis();
+        String tool = event.tool() == null ? "" : event.tool();
+        traces.append(session, "sandbox", event.type(), event.code() + " " + tool, event.detailAt(timestamp), timestamp);
     }
 }

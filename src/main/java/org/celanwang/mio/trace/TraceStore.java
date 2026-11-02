@@ -35,9 +35,14 @@ public class TraceStore {
             });
 
     public void append(String sessionId, String node, String type, String title, String detail) {
+        append(sessionId, node, type, title, detail, System.currentTimeMillis());
+    }
+
+    /** Same row clock as {@code detail}. Sandbox join keys must use this timestamp, not a second reading. */
+    public void append(String sessionId, String node, String type, String title, String detail, long timestamp) {
         CopyOnWriteArrayList<TraceEvent> events =
                 traces.computeIfAbsent(sessionId, k -> new CopyOnWriteArrayList<>());
-        TraceEvent event = new TraceEvent(System.currentTimeMillis(), node, type, title, detail);
+        TraceEvent event = new TraceEvent(timestamp, node, type, title, detail);
         events.add(event);
         eventPublisher.publish(sessionId, event);
         while (events.size() > MAX_EVENTS_PER_SESSION) {

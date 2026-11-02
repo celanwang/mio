@@ -46,18 +46,28 @@ public class SandboxExecutor {
 
     public ExecutionTicket admit(Admission admission) {
         Admission scoped = admission.principal() == null ? admission.withPrincipal(principal()) : admission;
+        ExecutionTicket ticket = null;
         try {
-            ExecutionTicket ticket = issuer.issue(scoped);
+            ticket = issuer.issue(scoped);
             audit.admitted(ticket);
             if (ticket.runtime() == RuntimeKind.CONTAINER) {
                 containers.launch(ticket);
             }
             return ticket;
         } catch (SandboxRefusedException refused) {
-            audit.refused(scoped.sessionId(), scoped.toolName(), scoped.principal(), refused.code(), refused.getMessage());
+            if (ticket == null) {
+                audit.refused(scoped.sessionId(), scoped.callId(), scoped.toolName(), scoped.principal(), refused.code());
+            } else {
+                audit.refused(ticket, refused.code());
+            }
             throw refused;
         } catch (SandboxUnavailableException unavailable) {
-            audit.refused(scoped.sessionId(), scoped.toolName(), scoped.principal(), unavailable.code(), unavailable.getMessage());
+            if (ticket == null) {
+                audit.unavailable(scoped.sessionId(), scoped.callId(), scoped.toolName(), scoped.principal(),
+                        unavailable.code());
+            } else {
+                audit.unavailable(ticket, unavailable.code());
+            }
             throw unavailable;
         }
     }
@@ -72,7 +82,8 @@ public class SandboxExecutor {
     }
 
     public SandboxScope open(ExecutionTicket ticket) {
-        audit.started(ticket, "workspace=" + workspace.principalRoot(ticket.principal()));
+        // Scope open is not a subprocess. process_started stays false until a launch returns.
+        audit.started(ticket, false);
         return SandboxScope.open(ticket, lease, workspace, issuer.clock());
     }
 

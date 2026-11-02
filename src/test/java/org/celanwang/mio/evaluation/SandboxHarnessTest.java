@@ -46,7 +46,7 @@ class SandboxHarnessTest {
             assertThat(observed.get("ticket_id")).isInstanceOf(String.class);
             assertThat(observed.get("effect_success")).isEqualTo(true);
             assertThat(observed.get("process_starts")).isEqualTo(0);
-            assertThat(observed.get("trace_events")).asList().contains("sandbox_admit", "sandbox_start", "sandbox_finish");
+            assertThat(observed.get("trace_events")).asList().contains("sandbox_admit", "sandbox_started", "sandbox_finish");
             long admits = ((java.util.List<?>) observed.get("trace_events")).stream().filter("sandbox_admit"::equals).count();
             assertThat(admits).isGreaterThanOrEqualTo(harness.world.actions.size());
             assertThat(harness.policy.isEnforce()).isFalse();
@@ -63,7 +63,7 @@ class SandboxHarnessTest {
             var observed = new LinkedHashMap<String, Object>();
             SandboxAuthorityObservations.copyTrace(observed, harness.traces.events(harness.session), true, 0);
             assertThat(observed.get("ticket_id")).isInstanceOf(String.class);
-            assertThat(observed.get("sandbox_event")).isIn("sandbox_admit", "sandbox_start", "sandbox_finish", "sandbox_egress");
+            assertThat(observed.get("sandbox_event")).isIn("sandbox_admit", "sandbox_started", "sandbox_finish", "sandbox_egress");
         }
     }
 

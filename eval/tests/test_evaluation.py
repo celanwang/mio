@@ -212,6 +212,94 @@ class ShadowTest(unittest.TestCase):
         self.assertTrue(changes[0]['needs_judge']); self.assertFalse(changes[1]['needs_judge'])
         after[0]['temperature']=1
         self.assertEqual(compare_runs(before,after)['comparable_pairs'],4)
+    def test_sandbox_section_joins_by_call_id_when_present(self):
+        policy=dict(schemaVersion=1,callId='c1',tool='create-order',effect='ASK',state='ASKING')
+        result=dict(schemaVersion=1,callId='c1',tool='create-order',state='SUCCESS',output='truncated')
+        started=_sandbox_body(callId='c1',event_kind='started',process_started=True,ticket_id='ticket-1',
+                              joinKey='jk1|s1|ticket-1|create-order|1792339200000')
+        refused=_sandbox_body(callId='c1',event_kind='refused',process_started=False,ticket_id='ticket-1',
+                              refuse_code='TICKET_REUSED',joinKey='jk1|s1|ticket-1|create-order|1792339200001')
+        rows=[event('policy_decision',policy),event('tool_result',result),
+              event('sandbox_started',started),event('sandbox_refused',refused)]
+        report=shadow_report(rows)
+        self.assertEqual(report['comparable_snapshots'],1)
+        self.assertEqual(report['snapshot_divergences'],0)
+        self.assertEqual(report['executed_after_refusal'],0)
+        self.assertGreaterEqual(report['sandbox']['diagnostics']['joined_by_call_id'],1)
+        linked=[row for row in report['sandbox']['rows'] if row['call_id']=='c1']
+        self.assertEqual(len(linked),1)
+        self.assertEqual(set(linked[0]['types']),{'sandbox_started','sandbox_refused'})
+        self.assertEqual(report['sandbox']['diagnostics']['joined_by_join_key'],0)
+    def test_sandbox_section_joins_by_join_key_when_call_id_absent(self):
+        body=_sandbox_body(callId=None,joinKey='jk1|s1||create-order|1792339200456',ticket_id=None,
+                           refuse_code='TICKET_REQUIRED',event_kind='refused',process_started=False)
+        report=shadow_report([event('sandbox_refused',body),event('sandbox_refused',body,id='e2',ts=1792339200456)])
+        # Same payload, distinct ids, same joinKey: one weak group and no exception.
+        self.assertEqual(report['sandbox']['diagnostics']['joined_by_join_key'],2)
+        self.assertEqual(report['sandbox']['diagnostics']['joined_by_call_id'],0)
+        self.assertEqual(len(report['sandbox']['rows']),1)
+        self.assertEqual(report['sandbox']['rows'][0]['join_mode'],'join_key')
+    def test_sandbox_forbids_weak_only_join_when_call_id_present(self):
+        shared='jk1|s1|ticket-1|create-order|1792339200000'
+        started=_sandbox_body(callId='c1',joinKey=shared,event_kind='started',process_started=True,ticket_id='ticket-1')
+        refused=_sandbox_body(callId='c2',joinKey=shared,event_kind='refused',process_started=False,
+                              ticket_id='ticket-1',refuse_code='TICKET_REUSED')
+        plain=_sandbox_body(callId=None,joinKey=shared,event_kind='refused',process_started=False,
+                            ticket_id=None,refuse_code='TICKET_REQUIRED')
+        report=shadow_report([event('sandbox_started',started),event('sandbox_refused',refused),
+                              event('sandbox_refused',plain,ts=1792339200001)])
+        self.assertEqual(report['sandbox']['diagnostics']['weak_join_used_despite_call_id'],0)
+        self.assertEqual(report['sandbox']['diagnostics']['joined_by_call_id'],2)
+        self.assertEqual(report['sandbox']['diagnostics']['joined_by_join_key'],1)
+        call_rows=[row for row in report['sandbox']['rows'] if row['join_mode']=='call_id']
+        self.assertEqual({row['call_id'] for row in call_rows},{'c1','c2'})
+        self.assertTrue(all(row['types']!=['sandbox_started','sandbox_refused'] or row['call_id']!='c1' for row in report['sandbox']['rows']))
+        self.assertEqual(len(report['sandbox']['rows']),3)
+    def test_sandbox_refuse_does_not_fold_into_policy_matrix(self):
+        policy=dict(schemaVersion=1,callId='c1',tool='create-order',effect='DENY',state='FINISHED')
+        result=dict(schemaVersion=1,callId='c1',tool='create-order',state='SUCCESS',output='truncated')
+        base_rows=[event('policy_decision',policy),event('tool_result',result)]
+        base=shadow_report(base_rows)
+        refused=_sandbox_body(callId='c1',event_kind='refused',refuse_code='TICKET_REQUIRED',process_started=False)
+        extra=shadow_report(base_rows+[event('sandbox_refused',refused)])
+        for key in ('comparable_snapshots','snapshot_divergences','executed_after_refusal','policy_snapshots','pairs','diagnostics'):
+            self.assertEqual(base[key],extra[key])
+        self.assertEqual(extra['sandbox']['diagnostics']['sandbox_refused'],1)
+        self.assertEqual(extra['snapshot_divergences'],base['snapshot_divergences'])
+    def test_sandbox_legacy_text_is_diagnostic_only(self):
+        report=shadow_report([event('sandbox_refused','plain text refuse')])
+        self.assertEqual(report['sandbox']['diagnostics']['sandbox_legacy_or_unstructured'],1)
+        self.assertEqual(report['diagnostics'].get('legacy_or_unstructured',0),0)
+        self.assertEqual(report['comparable_snapshots'],0)
+        self.assertEqual(report['sandbox']['rows'],[])
+    def test_export_types_are_recognized(self):
+        sql=(ROOT/'docs/evaluation/export-events.sql').read_text()
+        for kind in ('sandbox_started','sandbox_refused','sandbox_unavailable','policy_decision','tool_result','confirm'):
+            self.assertIn("'"+kind+"'",sql)
+        rows=[]
+        for kind,event_kind,process_started in (
+                ('sandbox_started','started',True),
+                ('sandbox_refused','refused',False),
+                ('sandbox_unavailable','unavailable',False)):
+            rows.append(event(kind,_sandbox_body(callId='c-'+kind,event_kind=event_kind,process_started=process_started,
+                                                  refuse_code=None if kind=='sandbox_started' else 'BWRAP_MISSING')))
+        rows.append(event('sandbox_admit',_sandbox_body(event_kind='admitted')))
+        rows.append(event('not_a_sandbox_event',_sandbox_body()))
+        report=shadow_report(rows)
+        diag=report['sandbox']['diagnostics']
+        self.assertEqual(diag['sandbox_started'],1)
+        self.assertEqual(diag['sandbox_refused'],1)
+        self.assertEqual(diag['sandbox_unavailable'],1)
+        self.assertEqual(diag['sandbox_events'],3)
+        self.assertEqual(diag['sandbox_legacy_or_unstructured'],0)
+        self.assertEqual(report['policy_snapshots'],0)
+
+
+def _sandbox_body(**fields):
+    body=dict(schemaVersion=1,callId='c1',joinKey='jk1|s1|ticket-1|create-order|1792339200000',
+              ticket_id='ticket-1',refuse_code=None,event_kind='started',process_started=False,tool='create-order')
+    body.update(fields)
+    return body
 
 
 def _authority_row(rule, sample='1', **fields):
@@ -223,11 +311,11 @@ def _authority_row(rule, sample='1', **fields):
 
 def _sandbox_row(rule, sample='1', **fields):
     row = _authority_row(rule, sample, sandbox_path='sandboxed', policy_engine='PolicyEngine', admitted=False,
-                         ticket_id=None, sandbox_event='sandbox_refuse', trace_events=['sandbox_refuse'],
+                         ticket_id=None, sandbox_event='sandbox_refused', trace_events=['sandbox_refused'],
                          effect_success=False, process_starts=0, refuse_code='TICKET_REQUIRED')
     if rule == 'ticket-reuse-refuse':
         row.update(admitted=True, ticket_id='ticket-1', process_starts=1, refuse_code='TICKET_REUSED',
-                   trace_events=['sandbox_admit', 'sandbox_start', 'sandbox_egress', 'sandbox_refuse'])
+                   trace_events=['sandbox_admit', 'sandbox_started', 'sandbox_egress', 'sandbox_refused'])
     elif rule == 'credential-without-ticket-zero':
         row.update(sandbox_event=None, trace_events=[], credential_released=False, refuse_code='NO_EGRESS_TICKET')
     row.update(fields)

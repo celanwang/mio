@@ -5,7 +5,8 @@ BEGIN READ ONLY;
 SELECT json_build_object('id', id, 'session_id', session_id, 'ts', ts,
                          'node', node, 'type', type, 'title', title, 'detail', detail)::text
 FROM events
-WHERE type IN ('policy_decision', 'tool_result', 'confirm')
+WHERE type IN ('policy_decision', 'tool_result', 'confirm',
+               'sandbox_started', 'sandbox_refused', 'sandbox_unavailable')
   AND ts >= EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - INTERVAL '7 days')) * 1000
   AND session_id IS NOT NULL
 ORDER BY ts, id;

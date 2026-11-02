@@ -7,12 +7,114 @@ from .metrics import ratio
 from .effects import divergence_kind
 
 
+SANDBOX_TYPES = ('sandbox_started', 'sandbox_refused', 'sandbox_unavailable')
+SANDBOX_NOTE = 'Diagnostic only. sandbox refuse ≠ policy deny; does not flip enforce.'
+
+
+def _sandbox_text(value):
+    return isinstance(value, str) and value.strip() != ''
+
+
+def _sandbox_detail(raw):
+    try:
+        detail = json.loads(raw) if isinstance(raw, str) else raw
+    except (ValueError, TypeError):
+        return None
+    return detail if isinstance(detail, dict) else None
+
+
+def _sandbox_identity(session, detail):
+    """Prefer callId. joinKey is only the identity when callId is missing. Never invent a callId."""
+    call_id = detail.get('callId')
+    join_key = detail.get('joinKey') if isinstance(detail.get('joinKey'), str) and detail.get('joinKey') != '' else None
+    if _sandbox_text(call_id):
+        return (session, 'call:' + call_id.strip()), 'call_id', call_id.strip(), join_key
+    if join_key:
+        return (session, 'jk:' + join_key), 'join_key', None, join_key
+    return None, 'unjoined', None, join_key
+
+
+def _sandbox_section(collected):
+    diagnostics = {
+        'sandbox_events': 0,
+        'sandbox_started': 0,
+        'sandbox_refused': 0,
+        'sandbox_unavailable': 0,
+        'sandbox_legacy_or_unstructured': 0,
+        'joined_by_call_id': 0,
+        'joined_by_join_key': 0,
+        'missing_join_key': 0,
+        'process_started_true': 0,
+        'refused_with_ticket_id': 0,
+        'refused_without_ticket_id': 0,
+        'weak_join_used_despite_call_id': 0,
+        'process_started_mismatch': 0,
+    }
+    groups = {}
+    order = []
+    for session, kind, raw in collected:
+        diagnostics['sandbox_events'] += 1
+        if kind in diagnostics:
+            diagnostics[kind] += 1
+        detail = _sandbox_detail(raw)
+        if detail is None or detail.get('schemaVersion') != 1:
+            diagnostics['sandbox_legacy_or_unstructured'] += 1
+            continue
+        identity, mode, call_id, join_key = _sandbox_identity(session, detail)
+        if join_key is None:
+            diagnostics['missing_join_key'] += 1
+        if mode == 'call_id':
+            diagnostics['joined_by_call_id'] += 1
+        elif mode == 'join_key':
+            diagnostics['joined_by_join_key'] += 1
+        else:
+            identity = (session, 'unjoined', diagnostics['sandbox_events'])
+        # A row that still has a callId must not have been filed under joinKey.
+        if mode != 'call_id' and _sandbox_text(detail.get('callId')):
+            diagnostics['weak_join_used_despite_call_id'] += 1
+        process_started = detail.get('process_started')
+        event_kind = detail.get('event_kind')
+        if process_started is True:
+            diagnostics['process_started_true'] += 1
+        if type(process_started) is not bool or (event_kind in ('refused', 'unavailable') and process_started is True):
+            diagnostics['process_started_mismatch'] += 1
+        if kind in ('sandbox_refused', 'sandbox_unavailable') or event_kind in ('refused', 'unavailable'):
+            ticket = detail.get('ticket_id')
+            if _sandbox_text(ticket):
+                diagnostics['refused_with_ticket_id'] += 1
+            else:
+                diagnostics['refused_without_ticket_id'] += 1
+        bucket = groups.get(identity)
+        if bucket is None:
+            bucket = dict(session_id=session, join_mode=mode, call_id=call_id, join_key=join_key,
+                          types=[], refuse_codes=[], ticket_id=None, process_started=False)
+            groups[identity] = bucket
+            order.append(identity)
+        elif bucket['join_mode'] != mode:
+            diagnostics['weak_join_used_despite_call_id'] += 1
+        if mode == 'call_id' and bucket['join_mode'] != 'call_id':
+            diagnostics['weak_join_used_despite_call_id'] += 1
+        bucket['types'].append(kind)
+        code = detail.get('refuse_code')
+        if _sandbox_text(code):
+            bucket['refuse_codes'].append(code)
+        ticket = detail.get('ticket_id')
+        if _sandbox_text(ticket):
+            bucket['ticket_id'] = ticket.strip()
+        if process_started is True:
+            bucket['process_started'] = True
+    if diagnostics['weak_join_used_despite_call_id']:
+        raise ValueError('sandbox join with callId must use callId, not joinKey')
+    return dict(diagnostics=diagnostics, rows=[groups[key] for key in order], note=SANDBOX_NOTE)
+
+
 def shadow_report(rows, day=None):
     counts = Counter()
     policies, results = {}, {}
     approvals = {}
     seen = {}
     daily = defaultdict(Counter)
+    sandbox_rows = []
     for row in rows:
         # Accept pg events rows, or exported TraceStore events enriched with sessionId.
         session = row.get('session_id', row.get('sessionId'))
@@ -33,6 +135,9 @@ def shadow_report(rows, day=None):
             seen[identity] = row
         kind = row.get('type')
         daily[local_day]['events'] += 1
+        if kind in SANDBOX_TYPES:
+            sandbox_rows.append((session, kind, row.get('detail')))
+            continue
         if kind not in ('policy_decision','tool_result','confirm'):
             continue
         raw = row.get('detail')
@@ -91,8 +196,10 @@ def shadow_report(rows, day=None):
                 executed_after_refusal=executed_after_refusal,
                 unmatched_results=len(set(results)-set(policies)),unresolved_calls=len(set(policies)-set(results)),
                 diagnostics=dict(counts),daily={d:dict(c) for d,c in sorted(daily.items())},pairs=pairs,
+                sandbox=_sandbox_section(sandbox_rows),
                 note='Snapshot disagreement is diagnostic, not a false-allow metric. ASK may later execute after human/Jev approval; '
-                     'command-sensitive tools can ALLOW despite static ASK. Legacy text is uncomparable. Truncated outputs are never final-state evidence.')
+                     'command-sensitive tools can ALLOW despite static ASK. Legacy text is uncomparable. Truncated outputs are never final-state evidence. '
+                     'sandbox_* rows are a separate continuity diagnostic and are not policy denies.')
 
 
 def compare_runs(before, after):
