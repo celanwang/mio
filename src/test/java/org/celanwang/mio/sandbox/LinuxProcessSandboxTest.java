@@ -21,7 +21,8 @@ class LinuxProcessSandboxTest {
         LinuxProcessSandbox sandbox = new LinuxProcessSandbox(Path.of("/usr/bin/bwrap"));
         ExecutionTicket ticket = ticket(false);
         if (!Files.isExecutable(sandboxPath())) {
-            assertThatThrownBy(() -> sandbox.plan(launch(ticket, false, List.of("/usr/bin/true"))))
+            // Match the ticket's network bit so the refusal is "bwrap missing", not a profile mismatch.
+            assertThatThrownBy(() -> sandbox.plan(launch(ticket, true, List.of("/usr/bin/true"))))
                     .isInstanceOf(SandboxUnavailableException.class);
             return;
         }

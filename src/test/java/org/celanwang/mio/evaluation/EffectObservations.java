@@ -1,9 +1,13 @@
 package org.celanwang.mio.evaluation;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -35,6 +39,32 @@ public final class EffectObservations {
         var text = new StringBuilder();
         for (var row : rows) text.append(JSON.writeValueAsString(row)).append('\n');
         Files.writeString(directory.resolve(name), text);
+    }
+
+    /**
+     * Replace rows that share {@code key} and keep every other row. Authority continuity is written
+     * by two tests; either order still leaves both the policy rules and the sandbox rules in one file.
+     */
+    public static synchronized void mergeJsonl(String name, List<Map<String, Object>> rows, String key) throws Exception {
+        var directory = Path.of("target/evaluation");
+        Files.createDirectories(directory);
+        var path = directory.resolve(name);
+        var replace = new HashSet<String>();
+        for (var row : rows) replace.add(String.valueOf(row.get(key)));
+        var merged = new ArrayList<Map<String, Object>>();
+        if (Files.isRegularFile(path)) {
+            for (String line : Files.readString(path).split("\n", -1)) {
+                if (line.isBlank()) continue;
+                Map<String, Object> existing = JSON.readValue(line, new TypeReference<LinkedHashMap<String, Object>>() {});
+                if (!replace.contains(String.valueOf(existing.get(key)))) merged.add(existing);
+            }
+        }
+        merged.addAll(rows);
+        merged.sort(Comparator.<Map<String, Object>, String>comparing(row -> String.valueOf(row.get(key)))
+                .thenComparing(row -> String.valueOf(row.get("sample_id"))));
+        var text = new StringBuilder();
+        for (var row : merged) text.append(JSON.writeValueAsString(row)).append('\n');
+        Files.writeString(path, text);
     }
 
     public static void writeJson(String name, Map<String, Object> document) throws Exception {

@@ -33,7 +33,7 @@ def write_summary(directory):
     blocked = [check['name'] for check in promotion['checks'] if not check['passed']]
     lines += ['',
               f'评测目标：{", ".join(report.get("evaluation_targets") or ["未标记"])}。生产等价：`production_parity={parity.get("production_parity")}`，缺失 {parity.get("missing") or []}。',
-              f'Authority Continuity Score：{_fmt(authority.get("score"))}；hard_pass={authority.get("hard_pass")}；缺失规则 {authority.get("missing_rules") or []}。',
+              f'Authority Continuity Score：{_fmt(authority.get("score"))}；hard_pass={authority.get("hard_pass")}；缺失规则 {authority.get("missing_rules") or []}；未通过 {authority.get("failed_rules") or []}。沙箱规则只承认 sandboxed 观察，旁路和无票据效果不算通过。',
               f'ConfirmFriction：{_fmt(friction.get("prompts_per_success"))}（{friction.get("status")}）；意外确认 {friction.get("unexpected_confirms")}。',
               f'RouteCost：状态 {cost.get("status")}；model_calls={cost.get("model_calls")}；input_tokens={cost.get("input_tokens")}；output_tokens={cost.get("output_tokens")}。离线 token 成本保持 N/A。',
               f'记忆消融资格证据：{"是" if lift.get("qualifies_as_model_evidence") else "否"}。习惯 ACTIVE 攻击成功率：{_fmt(habit.get("attack_success_rate"))}；策略仍被遵守：{habit.get("policy_respected")}。',
