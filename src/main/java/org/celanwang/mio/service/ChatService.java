@@ -1,5 +1,9 @@
 package org.celanwang.mio.service;
 
+import org.celanwang.mio.align.ProbeResult;
+import org.celanwang.mio.align.ValueConflictAdvisor;
+import org.celanwang.mio.align.ValueConflictEvents;
+import org.celanwang.mio.align.WritePath;
 import org.celanwang.mio.config.ToolPolicies;
 import org.celanwang.mio.memory.HabitDetector;
 import org.celanwang.mio.memory.MioLongTermMemory;
@@ -67,6 +71,7 @@ public class ChatService {
     private final HabitDetector habitDetector;
     private final ObjectMapper objectMapper;
     private final ChatExecutionOptions execution;
+    private final ValueConflictAdvisor align;
     private final Map<String, Object> runningSessions = new ConcurrentHashMap<>();
     /** Jev 判定结果（toolCallId → 是否通过），供误拦信号比对；有界 LRU 防泄漏。 */
     private final Map<String, Boolean> jevVerdicts = boundedMap(500);
@@ -92,15 +97,32 @@ public class ChatService {
                        PolicyEngine policyEngine,
                        MioLongTermMemory longTermMemory,
                        HabitDetector habitDetector,
-                       ObjectMapper objectMapper) {
+                       ObjectMapper objectMapper,
+                       ValueConflictAdvisor align) {
         this(agent,weibo,jevClient,jevThreshold,modelName,jevModel,traceStore,trustStore,policyEngine,longTermMemory,
-                habitDetector,objectMapper,ChatExecutionOptions.USER_CONVERSATION);
+                habitDetector,objectMapper,ChatExecutionOptions.USER_CONVERSATION, align);
+    }
+
+    public ChatService(ReActAgent agent, WeiboMcpService weibo, ObjectProvider<JevClient> jevClient,
+                       double jevThreshold, String modelName, String jevModel, TraceStore traceStore, TrustStore trustStore,
+                       PolicyEngine policyEngine, MioLongTermMemory longTermMemory, HabitDetector habitDetector,
+                       ObjectMapper objectMapper) {
+        this(agent, weibo, jevClient, jevThreshold, modelName, jevModel, traceStore, trustStore, policyEngine,
+                longTermMemory, habitDetector, objectMapper, ChatExecutionOptions.USER_CONVERSATION, null);
     }
 
     public ChatService(ReActAgent agent, WeiboMcpService weibo, ObjectProvider<JevClient> jevClient,
                        double jevThreshold,String modelName,String jevModel,TraceStore traceStore,TrustStore trustStore,
                        PolicyEngine policyEngine,MioLongTermMemory longTermMemory,HabitDetector habitDetector,
                        ObjectMapper objectMapper,ChatExecutionOptions execution) {
+        this(agent, weibo, jevClient, jevThreshold, modelName, jevModel, traceStore, trustStore, policyEngine,
+                longTermMemory, habitDetector, objectMapper, execution, null);
+    }
+
+    public ChatService(ReActAgent agent, WeiboMcpService weibo, ObjectProvider<JevClient> jevClient,
+                       double jevThreshold, String modelName, String jevModel, TraceStore traceStore, TrustStore trustStore,
+                       PolicyEngine policyEngine, MioLongTermMemory longTermMemory, HabitDetector habitDetector,
+                       ObjectMapper objectMapper, ChatExecutionOptions execution, ValueConflictAdvisor align) {
         this.execution=execution;
         this.agent = agent;
         this.weibo = weibo;
@@ -114,6 +136,7 @@ public class ChatService {
         this.longTermMemory = longTermMemory;
         this.habitDetector = habitDetector;
         this.objectMapper = objectMapper;
+        this.align = align == null ? ValueConflictAdvisor.baseline() : align;
     }
 
     public Mono<ChatResponse> chat(ChatRequest request) {
@@ -188,10 +211,14 @@ public class ChatService {
             recordLongTermMemory(context, sessionId);
             if (execution.recordMemory()) habitDetector.detectAsync();
             List<ToolUseBlock> pending = pendingCalls(context);
-            if (pending.isEmpty() || jevClient == null || policyEngine.isCircuitOpen()
+            // Probe already ran in auditPolicyDecisions, while these writes are still ASKING.
+            // Jev must not promote SUGGEST_ASK back to an automatic execution.
+            boolean probeHoldsWrite = pending.stream().anyMatch(this::probeHoldsWrite);
+            if (pending.isEmpty() || jevClient == null || policyEngine.isCircuitOpen() || probeHoldsWrite
                     || pending.stream().anyMatch(call -> !ToolPolicies.isJevReviewable(call.getName(), call.getInput()))) {
                 if (!pending.isEmpty()) {
-                    traceStore.append(sessionId, "human", "ask", "等待人工确认",
+                    traceStore.append(sessionId, "human", "ask",
+                            probeHoldsWrite ? "价值冲突，转人工确认" : "等待人工确认",
                             "待确认操作：" + pending.stream().map(ToolUseBlock::getName).toList());
                 }
                 return Mono.just(reply);
@@ -267,14 +294,17 @@ public class ChatService {
     }
 
     /**
-     * 影子审计：对本轮每个新工具调用运行 PolicyEngine 裁决并留痕（policy_decision 事件）。
-     * shadow 模式下裁决不影响实际执行，用于与真实结果对照；enforce 模式下同一裁决器即生效规则来源。
+     * 对本轮每个新工具调用先做只读价值冲突探测，再由 PolicyEngine 裁决。
+     * 探测只产生 CLEAR / CONFLICT / UNAVAILABLE 与 NONE / SUGGEST_ASK，不改裁决三态。
+     * 写操作在此之前已被权限链停在 ASKING；SUGGEST_ASK 会阻止随后的 Jev 自动恢复。
      */
     private void auditPolicyDecisions(String sessionId, RuntimeContext context, int before) {
         AgentState state = agent.getAgentState(context);
         if (state == null) {
             return;
         }
+        String intent = userIntent(context);
+        String alignSession = execution.alignSessionId() == null ? sessionId : execution.alignSessionId();
         List<Msg> messages = state.getContext();
         for (int i = Math.max(before, 0); i < messages.size(); i++) {
             Msg message = messages.get(i);
@@ -284,7 +314,14 @@ public class ChatService {
             for (ToolUseBlock call : message.getContentBlocks(ToolUseBlock.class)) {
                 var tool = agent.getToolkit().getTool(call.getName());
                 boolean readOnly = tool instanceof ToolBase base && base.isReadOnly();
+                boolean pureRead = WritePath.isPureReadOnly(call.getName(), call.getInput(), readOnly);
+                ProbeResult probed = align.inspect(alignSession, call.getId(), call.getName(), call.getInput(), pureRead, intent);
                 PolicyDecision decision = policyEngine.evaluate(call.getName(), readOnly);
+                Object command = call.getInput() == null ? null : call.getInput().get("command");
+                String commandText = command instanceof String text && !text.isBlank() && text.length() <= 80 ? text : null;
+                traceStore.append(sessionId, "align", "value_conflict_probe",
+                        "价值冲突 " + call.getName() + " → " + probed.status(),
+                        toJson(ValueConflictEvents.detail(call.getId(), call.getName(), commandText, probed, decision.effect())));
                 var detail = new LinkedHashMap<String, Object>();
                 detail.put("schemaVersion", 1);
                 detail.put("callId", call.getId());
@@ -293,12 +330,20 @@ public class ChatService {
                 detail.put("source", decision.source());
                 detail.put("reason", decision.reason());
                 detail.put("state", call.getState().name());
-                Object command = call.getInput() == null ? null : call.getInput().get("command");
-                if (command instanceof String text && !text.isBlank() && text.length() <= 80) detail.put("command", text);
+                if (commandText != null) detail.put("command", commandText);
                 traceStore.append(sessionId, "policy", "policy_decision",
                         "裁决 " + call.getName() + " → " + decision.effect(), toJson(detail));
             }
         }
+    }
+
+    private boolean probeHoldsWrite(ToolUseBlock call) {
+        if (!align.suggestsAsk(call.getId())) {
+            return false;
+        }
+        var tool = agent.getToolkit().getTool(call.getName());
+        boolean declared = tool instanceof ToolBase base && base.isReadOnly();
+        return !WritePath.isPureReadOnly(call.getName(), call.getInput(), declared);
     }
 
     /** 读取 Jev 模型路由结果（若有），记录路由事件并返回本次实际生效的模型名。 */

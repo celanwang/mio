@@ -111,8 +111,8 @@ public class MultiAgentConfig {
     @Bean DomainAgentFactory domainAgentFactory(List<DomainDefinition> builtins,org.celanwang.mio.goals.CapabilityPackages packages,@Qualifier("dashScopePlusModel")Model model,
             JdbcAgentStateStore states,AgentSkillRepository skills,PolicyEngine policy,WeiboMcpService weibo,ObjectProvider<JevClient> jev,
             @Value("${app.jev.auto-approve-threshold:0.8}")double threshold,TraceStore traces,TrustStore trust,MioLongTermMemory memory,
-            HabitDetector habits,ProfileStore profiles,ObjectMapper json,PersonalContext personal,EvidenceAdapters adapters,JdbcTemplate jdbc,ObjectProvider<SandboxExecutor> sandbox){
-        return new DomainAgentFactory(adapters.decorate(packages.combine(builtins)),c->model,states,skills,policy,weibo,jev,threshold,traces,trust,memory,habits,profiles,json).withPersonalContext(personal).withSelectedContext(jdbc).withDeclaredWrites(adapters.writes()).withSandbox(sandbox.getIfAvailable());
+            HabitDetector habits,ProfileStore profiles,ObjectMapper json,PersonalContext personal,EvidenceAdapters adapters,JdbcTemplate jdbc,ObjectProvider<SandboxExecutor> sandbox,org.celanwang.mio.align.ValueConflictAdvisor align){
+        return new DomainAgentFactory(adapters.decorate(packages.combine(builtins)),c->model,states,skills,policy,weibo,jev,threshold,traces,trust,memory,habits,profiles,json).withPersonalContext(personal).withSelectedContext(jdbc).withDeclaredWrites(adapters.writes()).withSandbox(sandbox.getIfAvailable()).withValueConflict(align);
     }
     @Bean FactExtractor tencentQuoteFactExtractor(){return new TencentQuoteFactExtractor();}
     @Bean OperationVerifier tencentOrderReceiptVerifier(){return new TencentOrderReceiptVerifier();}
