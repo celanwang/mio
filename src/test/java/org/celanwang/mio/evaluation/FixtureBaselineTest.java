@@ -16,6 +16,7 @@ class FixtureBaselineTest {
         var cases = mapper.readTree(corpus.toFile()).path("cases");
         var output = new ArrayList<Map<String,Object>>();
         for (JsonNode task : cases) {
+            if ("constraints".equals(task.path("scoring").asText("exact"))) continue;
             String skill = task.path("skill").asText();
             for (int sample = 0; sample < 5; sample++) {
                 try (var h = new AgentHarness()) {
@@ -41,7 +42,7 @@ class FixtureBaselineTest {
                     row.put("temperature", 0); row.put("timestamp", OffsetDateTime.now().toString());
                     row.put("dataset_sha256", sha(corpus)); row.put("skill_sha256", skillSha(skill));
                     row.put("session_id", h.session);
-                    row.put("evaluation_target", "permission-fixture");
+                    row.put("evaluation_target", "scripted-fixture");
                     row.put("prompt_sha256", sha(Path.of("src/test/java/org/celanwang/mio/evaluation/AgentHarness.java")));
                     row.put("final_state", new LinkedHashMap<>(h.world.state)); row.put("actions", List.copyOf(h.world.actions));
                     row.put("events", h.traces.events(h.session)); output.add(row);
@@ -53,8 +54,8 @@ class FixtureBaselineTest {
         for (var row : output) jsonl.append(mapper.writeValueAsString(row)).append('\n');
         Files.writeString(directory.resolve("fixture-runs.jsonl"), jsonl);
     }
-    static String skillSha(String skill) throws Exception {
-        Path root = Path.of("skills", skill);
+    static String skillSha(String skill) throws Exception { return fingerprintTree(Path.of("skills", skill)); }
+    static String fingerprintTree(Path root) throws Exception {
         var digest = MessageDigest.getInstance("SHA-256");
         try (var files = Files.walk(root)) {
             for (Path file : files.filter(Files::isRegularFile)

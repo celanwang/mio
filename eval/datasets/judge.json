@@ -1,5 +1,17 @@
 {
   "version": "1",
+  "labeling": {
+    "minimum_pairs": 20,
+    "human_winner": "A, B, tie, or null",
+    "current_labeled_pairs": 0,
+    "protocol": [
+      "Keep human_winner null until a person chooses. Do not copy a model winner into this field.",
+      "Add real answer pairs until the corpus has at least 20 cases. The six seeded pairs are not enough for the gate.",
+      "Present A/B, then the reversed order. Record winner_ab and winner_ba mapped back to the original A/B identity, never to the on-screen slot.",
+      "Set human_winner to A, B, or tie and label_status to human-reviewed only after that person finishes the pair.",
+      "Recompute dataset_sha256 by rerunning the report. Do not set approved_for_promotion and do not switch shadow to enforce."
+    ]
+  },
   "cases": [
     {
       "id": "judge-1",

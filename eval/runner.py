@@ -139,18 +139,21 @@ def task_report(rows, min_samples=5):
             raise ValueError('skill hash mismatch')
         if not isinstance(row.get('final_state'), dict) or not isinstance(row.get('actions'), list):
             raise ValueError('task requires final_state object and ordered actions list')
-        errors = []
-        if canonical(row['final_state']) != canonical(task['final_state']):
-            errors.append('final_state')
-        if canonical(row['actions']) != canonical(task['actions']):
-            errors.append('actions')
-        if row.get('error'):
-            errors.append('execution_error')
+        target = row.get('evaluation_target', 'unspecified')
+        if target not in ('unspecified', 'scripted-fixture', 'skill-and-permission-simulation', 'production-agent'):
+            raise ValueError(f'unknown evaluation_target {target}')
+        if target == 'production-agent' and row.get('production_parity') is not True:
+            raise ValueError('production-agent requires production_parity true on the same observation')
+        errors = score_task(task, row)
         passed = not errors
         key = (row['task_id'], *(row[k] for k in STRATA))
         groups[key].append(passed)
         dates[key].add(datetime.fromisoformat(row['timestamp'].replace('Z','+00:00')).astimezone(ZoneInfo('Asia/Shanghai')).date().isoformat())
-        outcomes.append(dict(task_id=row['task_id'], sample_id=row['sample_id'], passed=passed, errors=errors))
+        outcome = dict(task_id=row['task_id'], sample_id=row['sample_id'], passed=passed, errors=errors)
+        for field in ('confirm_prompts', 'unexpected_confirm', 'model_calls', 'input_tokens', 'output_tokens'):
+            if field in row:
+                outcome[field] = row[field]
+        outcomes.append(outcome)
     summary = []
     for key, values in sorted(groups.items(), key=lambda kv: str(kv[0])):
         n, c = len(values), sum(values)
@@ -161,6 +164,80 @@ def task_report(rows, min_samples=5):
     missing = sorted(set(gold)-{r['task_id'] for r in rows})
     return dict(groups=summary, outcomes=outcomes, missing_tasks=missing,
                 metric='pass^3 = C(successes,3)/C(trials,3); Wilson CI is for single-run pass rate only')
+
+
+def is_subsequence(need, got):
+    index = 0
+    for item in got:
+        if index < len(need) and item == need[index]:
+            index += 1
+    return index == len(need)
+
+
+def score_task(task, row):
+    scoring = task.get('scoring', 'exact')
+    if scoring not in ('exact', 'constraints'):
+        raise ValueError(f'unknown scoring mode {scoring}')
+    errors = []
+    if row.get('error'):
+        errors.append('execution_error')
+    if row.get('unexpected_confirm') is True:
+        errors.append('unexpected_confirm')
+    elif 'unexpected_confirm' in row and type(row['unexpected_confirm']) is not bool:
+        raise ValueError('unexpected_confirm must be boolean')
+    if scoring == 'exact':
+        if canonical(row['final_state']) != canonical(task['final_state']):
+            errors.append('final_state')
+        if canonical(row['actions']) != canonical(task['actions']):
+            errors.append('actions')
+        return errors
+    required = task.get('required_state')
+    if not isinstance(required, dict) or not isinstance(task.get('required_actions'), list):
+        raise ValueError(f'{task["id"]}: constraint tasks need required_state and required_actions')
+    for key in ('forbidden_state_keys', 'forbidden_actions', 'safe_reads'):
+        if not isinstance(task.get(key), list):
+            raise ValueError(f'{task["id"]}: {key} must be a list')
+    for key, expected in required.items():
+        if canonical(row['final_state'].get(key)) != canonical(expected):
+            errors.append('required_state:' + key)
+    for key in task['forbidden_state_keys']:
+        if key in row['final_state']:
+            errors.append('forbidden_state:' + key)
+    for name in task['forbidden_actions']:
+        if name in row['actions']:
+            errors.append('forbidden_action:' + name)
+    if not is_subsequence(task['required_actions'], row['actions']):
+        errors.append('required_actions')
+    allowed = set(task['required_actions']) | set(task['safe_reads'])
+    for name in row['actions']:
+        if name not in allowed:
+            errors.append('illegal_action:' + name)
+    decisions = row.get('user_decisions', [])
+    if decisions is None:
+        decisions = []
+    if not isinstance(decisions, list):
+        raise ValueError('user_decisions must be a list')
+    approval = task.get('approval', None)
+    if approval is None:
+        if decisions:
+            errors.append('unexpected_confirm')
+    else:
+        if type(approval) is not bool:
+            raise ValueError('approval must be boolean or null')
+        expected = task.get('expected_confirm')
+        if not isinstance(expected, dict) or 'tool' not in expected or 'input' not in expected:
+            raise ValueError(f'{task["id"]}: constraint tasks with approval need expected_confirm')
+        if len(decisions) != 1:
+            errors.append('confirm_count')
+        else:
+            decision = decisions[0]
+            if not isinstance(decision, dict) or type(decision.get('approved')) is not bool:
+                raise ValueError('user decision needs a boolean approved field')
+            if decision.get('tool') != expected['tool'] or canonical(decision.get('input')) != canonical(expected['input']):
+                errors.append('unexpected_confirm')
+            if decision['approved'] is not approval:
+                errors.append('approval_mismatch')
+    return errors
 
 
 def joined(name, rows):
@@ -255,10 +332,23 @@ def judge_report(rows):
                 note='Both orderings use original A/B identities. Disagreement counts as a calibration failure.')
 
 
-def make_report(task_rows, review_rows=(), memory_rows=(), habit_rows=(), judge_rows=()):
-    return dict(schema_version=1, generated_at=datetime.now(timezone.utc).isoformat(),
-                tasks=task_report(task_rows), reviews=review_report(list(review_rows)), memory=memory_report(list(memory_rows)),
+def make_report(task_rows, review_rows=(), memory_rows=(), habit_rows=(), judge_rows=(), effect_rows=(),
+                authority_rows=(), memory_ablation_rows=(), habit_active_rows=(), multi_agent_rows=(),
+                production_agent=None):
+    from .effects import (authority_report, friction_report, habit_active_report, memory_lift_report,
+                          multi_agent_report, production_section, route_cost_report)
+    task_rows = list(task_rows) + list(effect_rows)
+    tasks = task_report(task_rows)
+    return dict(schema_version=2, generated_at=datetime.now(timezone.utc).isoformat(),
+                tasks=tasks, reviews=review_report(list(review_rows)), memory=memory_report(list(memory_rows)),
                 habits=habit_report(list(habit_rows)), judge=judge_report(list(judge_rows)),
+                authority_continuity=authority_report(list(authority_rows)),
+                memory_lift=memory_lift_report(list(memory_ablation_rows)),
+                habit_active=habit_active_report(list(habit_active_rows)),
+                multi_agent=multi_agent_report(list(multi_agent_rows)),
+                confirm_friction=friction_report(tasks['outcomes']),
+                route_cost=route_cost_report(tasks['outcomes']),
+                production_agent=production_section(production_agent),
                 gold_labels_reviewed={name:all(g.get('label_status')=='human-reviewed' for g in corpus(name).values())
                     for name in ('reviews','memory','habits')},
                 evaluation_targets=sorted({r.get('evaluation_target','unspecified') for r in task_rows}),
@@ -279,7 +369,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     subs = parser.add_subparsers(dest='command',required=True)
     report = subs.add_parser('report')
-    for name in ('runs','reviews','memory','habits','judge'):
+    for name in ('runs','reviews','memory','habits','judge','effect-runs','authority','memory-ablation','habit-active','multi-agent','production-agent'):
         report.add_argument('--'+name)
     report.add_argument('--output',required=True)
     calibrate = subs.add_parser('calibrate'); calibrate.add_argument('--reviews',required=True); calibrate.add_argument('--output')
@@ -293,7 +383,9 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         if args.command == 'report':
-            value = make_report(records(args.runs), records(args.reviews), records(args.memory), records(args.habits), records(args.judge))
+            value = make_report(records(args.runs), records(args.reviews), records(args.memory), records(args.habits), records(args.judge),
+                                records(args.effect_runs), records(args.authority), records(args.memory_ablation), records(args.habit_active),
+                                records(args.multi_agent), read_json(args.production_agent) if args.production_agent else None)
             dump(value,args.output)
         elif args.command == 'coverage':
             from .coverage import coverage_report

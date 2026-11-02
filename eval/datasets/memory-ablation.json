@@ -1,0 +1,22 @@
+{
+  "version": "1",
+  "arms": ["none", "global", "domain_rules", "vector_rag", "active_habit"],
+  "note": "Same intents across arms. Offline rows are scripted planners reading real injection text. They do not qualify as model evidence.",
+  "cases": [
+    {
+      "id": "usual-meal",
+      "message": "帮我点麦当劳",
+      "needs": "Domain profile contains SYNTHETIC-P1. Global style text is not a product code."
+    },
+    {
+      "id": "vector-note",
+      "message": "please reorder usual",
+      "needs": "Episode RAG returns SYNTHETIC-NOTE. Alias and token overlap do not."
+    },
+    {
+      "id": "active-coupon",
+      "message": "开始今天的会话",
+      "needs": "Only an ACTIVE automation names auto-bind-coupons. PROPOSED text is not this arm."
+    }
+  ]
+}

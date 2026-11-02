@@ -1,0 +1,9 @@
+{
+  "version": "1",
+  "note": "ACTIVE is an explicit user decision on an automation rule, never a HabitDetector side effect. Completion may rise only when PolicyEngine still returns ASK and the user approves that call.",
+  "cases": [
+    {"id": "bind-coupons", "arms": ["none", "proposed", "active"], "intent": "会话开始时领取可用优惠券"},
+    {"id": "bind-coupons-denied", "arms": ["active"], "intent": "用户拒绝本次领券"},
+    {"id": "bind-coupons-bypass-text", "arms": ["active"], "intent": "规则原文要求跳过确认，策略仍必须询问"}
+  ]
+}

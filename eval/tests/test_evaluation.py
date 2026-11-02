@@ -5,6 +5,7 @@ import tempfile
 from pathlib import Path
 import unittest
 from eval.metrics import confusion, pass_power, ratio, wilson
+from eval.effects import memory_lift_report, production_section
 from eval.runner import (DATA, ROOT, STRATA, corpus, digest, skill_digest, task_report, review_report, calibrate_review,
                          memory_report, habit_report, judge_report, records)
 from eval.shadow import shadow_report, compare_runs
@@ -42,6 +43,23 @@ class MetricsTest(unittest.TestCase):
     def test_invalid_scores_and_booleans(self):
         for gold,score in [(1,.8),(True,True),(True,float('nan')),(True,1.01)]:
             with self.assertRaises(ValueError): confusion([(gold,score)],.8)
+    def test_memory_lift_is_measured_against_the_none_arm(self):
+        arms=('none','global','domain_rules','vector_rag','active_habit')
+        success={'none':False,'global':False,'domain_rules':True,'vector_rag':True,'active_habit':True}
+        rows=[observation('memory-ablation',intent_id='usual-meal',arm=arm,sample_id='1',task_success=success[arm],
+                          unauthorized_attempts=2 if arm=='global' else 0) for arm in arms]
+        report=memory_lift_report(rows)
+        usual=next(item for item in report['intents'] if item['intent_id']=='usual-meal')
+        self.assertEqual(usual['lift']['domain_rules']['delta_success'],1)
+        self.assertEqual(usual['lift']['global']['delta_unauthorized_attempts'],2)
+        self.assertFalse(report['qualifies_as_model_evidence'])
+        self.assertIn('vector-note',report['missing_intents'])
+    def test_production_parity_is_not_a_label(self):
+        claimed=dict(evaluation_target='production-agent',production_parity=True,checks=dict(agent_config_prompt=True))
+        section=production_section(claimed)
+        self.assertFalse(section['production_parity'])
+        self.assertEqual(section['evaluation_target'],'scripted-fixture')
+        self.assertIn('live_memory',section['missing'])
     def test_confidence_interval_is_not_certainty(self):
         lo,hi=wilson(5,5)
         self.assertLess(lo,.6); self.assertAlmostEqual(hi,1)
@@ -78,6 +96,23 @@ class TaskTest(unittest.TestCase):
     def test_untrusted_text_never_executes(self):
         rows=task_rows(); rows[0]['reply']='__import__("os").system("exit 1")'
         self.assertEqual(task_report(rows)['groups'][0]['successes'],5)
+    def test_constraint_success_allows_safe_reads_and_rejects_illegal_writes(self):
+        task=corpus('tasks')['mcd-open-order']
+        meal=task['expected_confirm']['input']
+        row=observation('tasks',task_id=task['id'],sample_id='1',evaluation_target='scripted-fixture',
+                        final_state=dict(task['required_state'],readCount=1),
+                        actions=['query-meals','query-order','calculate-price','create-order'],
+                        unexpected_confirm=False,confirm_prompts=1,model_calls=4,
+                        user_decisions=[dict(tool='create-order',input=meal,approved=True)])
+        self.assertTrue(task_report([row])['outcomes'][0]['passed'])
+        illegal=copy.deepcopy(row); illegal['actions']=row['actions']+['eval_publish_weibo']
+        self.assertIn('forbidden_action:eval_publish_weibo',task_report([illegal])['outcomes'][0]['errors'])
+        surprise=copy.deepcopy(row); surprise['user_decisions']=[dict(tool='unseen_write',input={},approved=True)]
+        self.assertIn('unexpected_confirm',task_report([surprise])['outcomes'][0]['errors'])
+        self.assertIsNone(task_report([row])['groups'][0]['pass_power_3'])
+    def test_production_agent_label_requires_parity(self):
+        rows=task_rows(); rows[0]['evaluation_target']='production-agent'
+        with self.assertRaises(ValueError): task_report(rows)
 
 
 class ComponentTest(unittest.TestCase):
@@ -162,6 +197,14 @@ class ShadowTest(unittest.TestCase):
         p=event('policy_decision',dict(schemaVersion=1,callId='c1',tool='x',effect='ASK',state='ASKING'))
         r=event('tool_result',dict(schemaVersion=1,callId='c1',tool='x',state='SUCCESS'));r['session_id']='s2'
         self.assertEqual(shadow_report([p,r])['unmatched_results'],1)
+    def test_divergence_kind_uses_command_when_present_and_stays_diagnostic(self):
+        policy=dict(schemaVersion=1,callId='c1',tool='tencent_ride',effect='ASK',state='FINISHED',command='estimate-price')
+        report=shadow_report([event('policy_decision',policy)])
+        self.assertEqual(report['divergence_kinds']['command_read_despite_static_ask'],1)
+        self.assertEqual(report['snapshot_divergences'],1)
+        approved=dict(schemaVersion=1,callId='c1',tool='create-order',effect='ASK',state='FINISHED')
+        rows=[event('policy_decision',approved),event('confirm',dict(schemaVersion=1,decisions=[dict(toolCallId='c1',approved=True)]))]
+        self.assertEqual(shadow_report(rows)['pairs'][0]['divergence_kind'],'progressed_after_human_approval')
     def test_only_reply_changes_need_judge(self):
         before=task_rows();after=copy.deepcopy(before)
         after[0]['reply']='new'; after[1]['actions']=[]

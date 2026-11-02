@@ -4,6 +4,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 import json
 from .metrics import ratio
+from .effects import divergence_kind
 
 
 def shadow_report(rows, day=None):
@@ -59,6 +60,7 @@ def shadow_report(rows, day=None):
             counts['duplicate_snapshots'] += 1
         collection[key] = detail
     comparable=divergences=executed_after_refusal=0
+    kinds=Counter()
     pairs=[]
     for key, policy in policies.items():
         effect, state = policy.get('effect'), policy.get('state')
@@ -77,11 +79,16 @@ def shadow_report(rows, day=None):
         executed = bool(result and str(result.get('state')).upper() == 'SUCCESS')
         refusal_violation = executed and approvals.get(key) is False
         executed_after_refusal += refusal_violation
+        command = policy.get('command') if isinstance(policy.get('command'), str) else None
+        kind = divergence_kind(effect, state, policy.get('tool'), command, approvals.get(key)) if divergent else None
+        if kind:
+            kinds[kind] += 1
         pairs.append(dict(session_id=key[0],call_id=key[1],tool=policy['tool'],effect=effect,snapshot_state=state,
-                          snapshot_divergent=divergent, result_state=result.get('state') if result else None,
+                          snapshot_divergent=divergent, divergence_kind=kind, result_state=result.get('state') if result else None,
                           human_approved=approvals.get(key),executed_after_refusal=refusal_violation))
     return dict(policy_snapshots=len(policies),comparable_snapshots=comparable, snapshot_divergences=divergences,
-                snapshot_divergence_rate=ratio(divergences,comparable),executed_after_refusal=executed_after_refusal,
+                snapshot_divergence_rate=ratio(divergences,comparable), divergence_kinds=dict(kinds),
+                executed_after_refusal=executed_after_refusal,
                 unmatched_results=len(set(results)-set(policies)),unresolved_calls=len(set(policies)-set(results)),
                 diagnostics=dict(counts),daily={d:dict(c) for d,c in sorted(daily.items())},pairs=pairs,
                 note='Snapshot disagreement is diagnostic, not a false-allow metric. ASK may later execute after human/Jev approval; '
