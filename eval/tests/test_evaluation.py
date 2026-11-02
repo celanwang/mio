@@ -297,6 +297,24 @@ class AuthorityReportTest(unittest.TestCase):
         next(row for row in unknown_path if row['rule_id'] == 'no-ticket-refuse')['sandbox_path'] = 'side-door'
         with self.assertRaises(ValueError):
             authority_report(unknown_path)
+    def test_network_allowed_is_read_only_and_not_a_destination_filter(self):
+        self.assertEqual(authority_report(_complete_authority())['score'], 1)
+        for value in (True, False, None):
+            stamped = _complete_authority()
+            for row in stamped:
+                if row['rule_id'] in SANDBOX_AUTHORITY_RULES:
+                    row['network_allowed'] = value
+            report = authority_report(stamped)
+            self.assertEqual(report['score'], 1)
+            self.assertEqual(report['failed_rules'], [])
+        claimed = _complete_authority()
+        next(row for row in claimed if row['rule_id'] == 'no-ticket-refuse')['network_allowed'] = 'destination-filter'
+        with self.assertRaises(ValueError):
+            authority_report(claimed)
+        rows = [row for row in _complete_authority() if row['rule_id'] != 'no-ticket-refuse']
+        bypass = _sandbox_row('no-ticket-refuse', 'bypass', sandbox_path='bypass', effect_success=True,
+                              trace_events=[], network_allowed=True)
+        self.assertFalse(_rule_passed(rows + [bypass], 'no-ticket-refuse'))
 
 
 if __name__=='__main__': unittest.main()

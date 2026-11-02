@@ -43,12 +43,24 @@
 | `SandboxExecutor` / `SandboxedTool` | JVM 工具调用边界 |
 | `CredentialProxy` / `CredentialLease` | 麦当劳、微博、打车令牌只在有票据时交出。麦当劳 MCP 不再使用静态 `Authorization` 头 |
 | `WorkspaceLayout` | `{root}/{principal}`。默认主体 `local-owner` 的打车数据仍在 `.tencent-ride`；其他主体使用自己的 `tencent-ride` 目录 |
-| `LinuxProcessSandbox` | bubblewrap：`--unshare-user/pid/ipc/uts`，`--clearenv`，系统目录只读，只绑运行脚本、会话目录和账号目录 |
+| `LinuxProcessSandbox` | bubblewrap：`--unshare-user/pid/ipc/uts`，`--clearenv`，系统目录只读，只绑运行脚本、会话目录和账号目录。出网只有布尔 `--unshare-net`，见下一节 |
 | `ContainerRuntimeHook` | P2 接缝 |
 | `RowIsolationGuard` | P2 行级隔离接缝，`principal_id = ?` 尚未加到现有表 |
 | `GET /api/security/sandbox` | 回环只读状态，不授予执行 |
 
 打车 `TencentRideService.execute` 是子进程的唯一启动点，它只调用 `ProcessSandbox`。主对话里的打车工具、生产领域工具，以及离线效果 / ACS 夹具都带上 `SandboxExecutor`（合成工具再包 `SandboxedTool`）。夹具仍 mock `TencentRideService`，默认不启动 bubblewrap。单参数构造函数只留给不作为 ACS 证据的单元测试；效果夹具若绕过票据，`effect_success` 不能带上 `ticket_id`，观察行也不会是 `sandbox_path=sandboxed` 的通过。
+
+## 出网边界
+
+子进程和 JVM 不是同一种出网控制。两边都还没有按目的地址过滤。
+
+**子进程是一个布尔。** `IsolationProfile.networkAllowed` 为 false 时，`LinuxProcessSandbox.plan` 的 argv 包含 `--unshare-net`；为 true 时不包含这一项。进程参数里的布尔必须和票据隔离档一致，否则拒绝码是 `NETWORK_MISMATCH`，进程不启动。这只表示这个子进程有没有网络命名空间出网，不表示允许哪些地址、域名或端口。argv 里没有 iptables、seccomp 或 gVisor。
+
+**JVM 走凭据代理，没有自己的网络命名空间。** 麦当劳、微博、打车的令牌只在活票据覆盖对应凭据域时由 `CredentialProxy` 交出。没有票据就不出令牌。代理约束的是凭据，不是套接字目的地。
+
+**打车允许出网，仍然要票据。** 询价、改地址草稿、下单这三档子进程都是 `networkAllowed=true`，因为要访问腾讯出行接口。允许出网不能省略执行票据；下单和取消还要人工确认后的票据。
+
+**这次没有建立：** 目的地址或域名过滤、seccomp、gVisor。`GET /api/security/sandbox` 的 `notEstablished` 继续包含 `destination network filter`。不要把状态接口或本段读成已经按目的地过滤，或读成 JVM 有网络命名空间。
 
 ## 已建立与未建立
 
@@ -59,13 +71,13 @@
 - 审计事件进 `TraceStore`（`sandbox_admit` / `sandbox_refuse` / `sandbox_egress` / `sandbox_start`），明细不含令牌
 - 打车桥接强制走进程沙箱；沙箱启动失败或缺少下单票据时不启动进程
 - 凭据代理：无票据拒绝出站，且不写 `sandbox_egress` / `sandbox_refuse`（痕迹为空）
-- 离线夹具的准入投影复用 `SandboxAuthorityObservations` 字段（`sandbox_path`、`policy_engine`、`admitted`、`ticket_id`、`sandbox_event`、`trace_events`、`effect_success`、`process_starts`），不另开采集通道
+- 离线夹具的准入投影复用 `SandboxAuthorityObservations` 字段（`sandbox_path`、`policy_engine`、`admitted`、`ticket_id`、`sandbox_event`、`trace_events`、`effect_success`、`process_starts`，以及可选只读 `network_allowed`），不另开采集通道。`network_allowed` 只回显票据上的布尔出网位；缺省或 null 表示这次观察没有记录它。它不授予出网，也不是目的地过滤。`shadow.py` 不消费这个字段
 
 **未建立（不要当成已经做到）：**
 
 - gVisor / 容器运行时。开关默认关闭，打开也只返回 `CONTAINER_NOT_ESTABLISHED`
 - 数据库行级安全、RLS、按主体拆 schema。产品边界仍是单机 `local-owner`
-- 按目标地址收紧的网络过滤。打车子进程需要访问腾讯出行接口，所以这三档都允许出网；其它只读子进程默认 `--unshare-net`
+- 按目标地址或域名收紧的网络过滤。子进程只有布尔 `--unshare-net`；打车三档允许出网，但仍要票据。见「出网边界」
 - seccomp、capability 白名单
 - 询价也要写会话草稿，所以会话目录在只读风险档仍然可写。只读约束的是宿主机和系统挂载，不是一份完全只读的文件系统
 - 麦当劳 / 微博 HTTP 客户端若在自定义器抛错后仍把请求发出去，SDK 行为不在本仓库内证明。自定义器在没有票据时不会附带令牌，并抛出拒绝

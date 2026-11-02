@@ -17,6 +17,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -204,6 +205,29 @@ class SandboxIsolationTest {
         assertThatThrownBy(() -> new ContainerRuntimeHook(stack.properties).launch(stack.issuer.bootstrap(PrincipalId.LOCAL_OWNER, "mcd")))
                 .extracting(error -> ((SandboxUnavailableException) error).code())
                 .isEqualTo("CONTAINER_NOT_ESTABLISHED");
+    }
+
+    @Test
+    void statusKeepsDestinationFilterUnestablished() {
+        SandboxProperties properties = new SandboxProperties();
+        PolicyEngine policy = new PolicyEngine("shadow");
+        Map<String, Object> body = new SandboxController(properties, policy, new ContainerRuntimeHook(properties),
+                new RowIsolationGuard(), new LinuxProcessSandbox(Path.of("/no/such/bwrap"))).status();
+        assertThat(policy.isEnforce()).isFalse();
+        assertThat(body.get("policyMode")).isEqualTo("shadow");
+        assertThat(body.get("notEstablished")).isEqualTo(List.of(
+                "gvisor",
+                "database row security",
+                "destination network filter",
+                "seccomp"));
+        assertThat(body.get("established")).isEqualTo(List.of(
+                "principal workspace",
+                "execution tickets",
+                "credential proxy",
+                "subprocess bubblewrap required"));
+        assertThat(body.get("container")).isEqualTo("NOT_ESTABLISHED");
+        assertThat(body.get("rowIsolation")).isEqualTo("NOT_ESTABLISHED");
+        assertThat(body.toString()).doesNotContain("netns").doesNotContain("iptables");
     }
 
     @Test
