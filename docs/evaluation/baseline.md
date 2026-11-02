@@ -35,3 +35,13 @@
 - ConfirmFriction 的产品体验和 RouteCost 的 token / 路由账单。离线没有 token 时字段为 null，状态是 `NOT_OBSERVED_OFFLINE` 或 `SCRIPTED_TURNS_ONLY`。
 - judge 人评。`human_winner` 仍全部为 null，不足 20 对。
 - 线上影子窗口。分歧分型只消费已有事件里的 `command`，不收集私人会话。
+
+## 沙箱 ACS（评测侧）
+
+在 v16 沙箱（`784f9e5`）之上，ACS 增加四条离线硬规则：`no-ticket-refuse`、`ticket-reuse-refuse`、`credential-without-ticket-zero`、`sandbox_refuse-audited`。这一侧不改沙箱运行时，不把 `AgentHarness` 接进 `SandboxedTool`，也不改 `shadow.py`。`approved_for_promotion` 仍是 false。`evaluation_target` 仍是 `scripted-fixture`。
+
+双轨：单参数工具构造函数继续服务纯单元测试。效果 / ACS 只承认 `sandbox_path=sandboxed` 的观察；旁路、缺 `ticket_id` 的准入写、无票据的效果成功都不算通过。缺任何一条规则时 ACS 为 null，不是 0 分通过。scripted 基线的晋升命令仍必须退出码 1。bubblewrap 不可用时这四条仍然跑，因为进程由测试双份代替，缺失票据在 `LinuxProcessSandbox.plan` 里于启动前拒绝。
+
+harness 一旦走沙箱，应复用 `SandboxAuthorityObservations` 的字段，把准入写的 `ticket_id` 和 TraceStore 的 `sandbox_admit` / `sandbox_refuse` / `sandbox_egress` / `sandbox_start` / `sandbox_finish` 一并导出。在那之前，不要把剧本旁路写成 ACS 通过。
+
+同日 `./scripts/eval.sh`（无 `.env`、无 PostgreSQL、无模型密钥、无 bubblewrap）：Java 367 项、失败 0、错误 0、跳过 108（实库套件，以及本机没有 bubblewrap 时的真实挂载用例）。Python 65 项通过。ACS = 1（十条 scripted 规则，含四条沙箱）。评测目标仍是 `scripted-fixture`，`production_parity` 为 false。晋升评审 `insufficient_or_failed_evidence`；统一入口按预期看到晋升退出码 1 后继续。验收状态 `POSTGRES_REQUIRED`，资格 `NOT_ESTABLISHED`。`approved_for_promotion` 仍是 false。

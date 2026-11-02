@@ -15,7 +15,10 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
-/** Exports the hard rules already covered by ScenarioIntegrationTest. A green file is ACS material, not enforce approval. */
+/**
+ * Exports the policy-continuity rules already covered by ScenarioIntegrationTest.
+ * Sandbox ACS rows are merged in by SandboxAuthorityTest. A green file is ACS material, not enforce approval.
+ */
 class AuthorityContinuityTest {
     static final Map<String, Object> MEAL = Map.of("storeCode", "SYNTHETIC-S1", "productCode", "SYNTHETIC-P1", "quantity", 1);
 
@@ -35,7 +38,7 @@ class AuthorityContinuityTest {
             row.put("passed", true);
             rows.add(row);
         }
-        EffectObservations.writeJsonl("authority-continuity.jsonl", rows);
+        EffectObservations.mergeJsonl("authority-continuity.jsonl", rows, "rule_id");
     }
 
     private static void approvalIsNotReusableAndPlaintextCannotResume() {

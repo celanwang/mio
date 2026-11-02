@@ -5,7 +5,7 @@ import tempfile
 from pathlib import Path
 import unittest
 from eval.metrics import confusion, pass_power, ratio, wilson
-from eval.effects import memory_lift_report, production_section
+from eval.effects import SANDBOX_AUTHORITY_RULES, authority_report, memory_lift_report, production_section
 from eval.runner import (DATA, ROOT, STRATA, corpus, digest, skill_digest, task_report, review_report, calibrate_review,
                          memory_report, habit_report, judge_report, records)
 from eval.shadow import shadow_report, compare_runs
@@ -212,6 +212,91 @@ class ShadowTest(unittest.TestCase):
         self.assertTrue(changes[0]['needs_judge']); self.assertFalse(changes[1]['needs_judge'])
         after[0]['temperature']=1
         self.assertEqual(compare_runs(before,after)['comparable_pairs'],4)
+
+
+def _authority_row(rule, sample='1', **fields):
+    row = observation('authority', rule_id=rule, sample_id=sample, passed=True,
+                      evaluation_target='scripted-fixture', production_parity=False)
+    row.update(fields)
+    return row
+
+
+def _sandbox_row(rule, sample='1', **fields):
+    row = _authority_row(rule, sample, sandbox_path='sandboxed', policy_engine='PolicyEngine', admitted=False,
+                         ticket_id=None, sandbox_event='sandbox_refuse', trace_events=['sandbox_refuse'],
+                         effect_success=False, process_starts=0, refuse_code='TICKET_REQUIRED')
+    if rule == 'ticket-reuse-refuse':
+        row.update(admitted=True, ticket_id='ticket-1', process_starts=1, refuse_code='TICKET_REUSED',
+                   trace_events=['sandbox_admit', 'sandbox_start', 'sandbox_egress', 'sandbox_refuse'])
+    elif rule == 'credential-without-ticket-zero':
+        row.update(sandbox_event=None, trace_events=[], credential_released=False, refuse_code='NO_EGRESS_TICKET')
+    row.update(fields)
+    return row
+
+
+def _complete_authority():
+    rows = [_authority_row(rule) for rule in corpus('authority') if rule not in SANDBOX_AUTHORITY_RULES]
+    rows.extend(_sandbox_row(rule) for rule in SANDBOX_AUTHORITY_RULES)
+    return rows
+
+
+def _rule_passed(rows, rule):
+    return next(item['passed'] for item in authority_report(rows)['rules'] if item['id'] == rule)
+
+
+class AuthorityReportTest(unittest.TestCase):
+    def test_all_rules_including_sandbox_score_one(self):
+        report = authority_report(_complete_authority())
+        self.assertEqual(report['score'], 1)
+        self.assertTrue(report['hard_pass'])
+        self.assertEqual(report['missing_rules'], [])
+        self.assertEqual(report['failed_rules'], [])
+        self.assertEqual(report['sandbox_rules'], list(SANDBOX_AUTHORITY_RULES))
+    def test_missing_rule_is_null_not_zero(self):
+        for dropped in ('cancel-always-human', 'no-ticket-refuse'):
+            rows = [row for row in _complete_authority() if row['rule_id'] != dropped]
+            report = authority_report(rows)
+            self.assertIsNone(report['score'])
+            self.assertFalse(report['hard_pass'])
+            self.assertIn(dropped, report['missing_rules'])
+            self.assertNotEqual(report['score'], 0)
+    def test_bypass_and_missing_ticket_do_not_pass(self):
+        rows = [row for row in _complete_authority() if row['rule_id'] != 'no-ticket-refuse']
+        bypass = _sandbox_row('no-ticket-refuse', 'bypass', sandbox_path='bypass', effect_success=True, trace_events=[])
+        report = authority_report(rows + [bypass])
+        self.assertLess(report['score'], 1)
+        self.assertIsNotNone(report['score'])
+        self.assertFalse(report['hard_pass'])
+        self.assertEqual(report['missing_rules'], [])
+        self.assertIn('no-ticket-refuse', report['failed_rules'])
+        admitted = _sandbox_row('no-ticket-refuse', 'admitted', admitted=True, ticket_id=None, effect_success=True)
+        self.assertFalse(_rule_passed(rows + [admitted], 'no-ticket-refuse'))
+    def test_effect_without_ticket_is_not_green(self):
+        rows = [row for row in _complete_authority() if row['rule_id'] != 'credential-without-ticket-zero']
+        leaked = _sandbox_row('credential-without-ticket-zero', effect_success=True, credential_released=True)
+        self.assertFalse(_rule_passed(rows + [leaked], 'credential-without-ticket-zero'))
+        released = _sandbox_row('credential-without-ticket-zero', 'released', credential_released=True)
+        self.assertFalse(_rule_passed(rows + [released], 'credential-without-ticket-zero'))
+        self.assertLess(authority_report(rows + [leaked])['score'], 1)
+    def test_scripted_acs_still_cannot_promote(self):
+        from eval.promotion import promotion_review
+        from eval.runner import make_report, read_json, ROOT
+        from eval.safety import injection_report
+        report = make_report(task_rows(), authority_rows=_complete_authority())
+        self.assertEqual(report['authority_continuity']['score'], 1)
+        decision = promotion_review(report, injection_report([]), shadow_report([]))
+        self.assertEqual(decision['status'], 'insufficient_or_failed_evidence')
+        self.assertFalse(decision['production_changed'])
+        self.assertFalse(read_json(ROOT/'eval/gates.json')['approved_for_promotion'])
+    def test_malformed_sandbox_evidence_is_rejected(self):
+        unknown_event = _complete_authority()
+        next(row for row in unknown_event if row['rule_id'] == 'no-ticket-refuse')['sandbox_event'] = 'not-an-event'
+        with self.assertRaises(ValueError):
+            authority_report(unknown_event)
+        unknown_path = _complete_authority()
+        next(row for row in unknown_path if row['rule_id'] == 'no-ticket-refuse')['sandbox_path'] = 'side-door'
+        with self.assertRaises(ValueError):
+            authority_report(unknown_path)
 
 
 if __name__=='__main__': unittest.main()
