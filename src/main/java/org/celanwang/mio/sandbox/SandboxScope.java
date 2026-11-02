@@ -3,6 +3,7 @@ package org.celanwang.mio.sandbox;
 import java.time.Clock;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Binds a ticket to the thread that opened the scope and holds the credential lease.
@@ -16,6 +17,7 @@ public final class SandboxScope implements AutoCloseable {
     private final CredentialLease lease;
     private final boolean acquired;
     private final long owner;
+    private final AtomicBoolean closed = new AtomicBoolean();
 
     private SandboxScope(ExecutionTicket ticket, CredentialLease lease, boolean acquired, long owner) {
         this.ticket = ticket;
@@ -59,6 +61,9 @@ public final class SandboxScope implements AutoCloseable {
 
     @Override
     public void close() {
+        if (!closed.compareAndSet(false, true)) {
+            return;
+        }
         OPEN.remove(owner, this);
         if (acquired && ticket.credential() != null) {
             lease.release(ticket.credential(), ticket);

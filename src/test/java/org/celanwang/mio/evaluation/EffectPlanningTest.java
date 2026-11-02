@@ -96,6 +96,8 @@ class EffectPlanningTest {
             row.put("model_calls", harness.modelInputs.size());
             row.put("final_state", new LinkedHashMap<>(harness.world.state));
             row.put("actions", List.copyOf(harness.world.actions));
+            SandboxAuthorityObservations.copyTrace(row, harness.traces.events(harness.session),
+                    !harness.world.actions.isEmpty(), 0);
             var state = mapper.valueToTree(harness.world.state);
             task.path("required_state").properties().forEach(field ->
                     assertThat(state.path(field.getKey())).as(task.path("id").asText()).isEqualTo(field.getValue()));

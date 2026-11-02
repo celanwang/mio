@@ -1,13 +1,10 @@
 package org.celanwang.mio.evaluation;
 
 import io.agentscope.extensions.judge.jev.*;
-import org.celanwang.mio.service.TencentRideService;
-import org.celanwang.mio.tool.*;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import reactor.core.publisher.Mono;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.*;
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -118,17 +115,7 @@ class ScenarioIntegrationTest {
 
     @Test void realRideAdaptersUseMockServiceAndRequireSeparateCreateConfirmation() throws Exception {
         try (var h = new AgentHarness()) {
-            var service = mock(TencentRideService.class);
-            when(service.execute(nullable(String.class), anyMap())).thenAnswer(inv -> {
-                Map<String, Object> request = inv.getArgument(1);
-                String command = (String) request.get("command");
-                @SuppressWarnings("unchecked") Map<String,Object> args = new LinkedHashMap<>((Map<String,Object>) request.getOrDefault("parameters", Map.of()));
-                if (request.containsKey("stateVersion")) args.put("stateVersion", request.get("stateVersion"));
-                Object result = h.world.execute("create-order".equals(command) ? "ride-create" : command, args);
-                return new ObjectMapper().writeValueAsString(result);
-            });
-            h.toolkit.registerAgentTool(new TencentRideTool(service));
-            h.toolkit.registerAgentTool(new TencentRideCreateOrderTool(service));
+            h.addRide();
             h.call("tencent_ride", Map.of("command", "estimate-price", "parameters", Map.of()));
             h.call("tencent_ride_create_order", Map.of("price_estimate_keys", List.of("SYNTHETIC-Q1"), "stateVersion", "SYNTHETIC-V1", "summary", "SYNTHETIC A → B，快车，18元"));
             h.say("done");
@@ -138,6 +125,10 @@ class ScenarioIntegrationTest {
             h.decide(pending, true);
             assertThat(h.world.state).containsEntry("rideOrderId", "9007199254740995");
             assertThat(h.world.actions).containsExactly("estimate-price", "ride-create");
+            var observed = new LinkedHashMap<String, Object>();
+            SandboxAuthorityObservations.copyTrace(observed, h.traces.events(h.session), true, 0);
+            assertThat(observed.get("sandbox_path")).isEqualTo(SandboxAuthorityObservations.PATH_SANDBOXED);
+            assertThat(observed.get("ticket_id")).isInstanceOf(String.class);
         }
     }
 

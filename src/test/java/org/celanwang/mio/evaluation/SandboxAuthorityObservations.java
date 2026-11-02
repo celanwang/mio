@@ -1,5 +1,8 @@
 package org.celanwang.mio.evaluation;
 
+import org.celanwang.mio.trace.TraceEvent;
+
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -7,11 +10,8 @@ import java.util.Set;
 /**
  * Observation shape for the sandbox half of Authority Continuity.
  *
- * <p>Github-2 owns wiring {@code AgentHarness} through {@code SandboxedTool} / {@code SandboxExecutor} /
- * {@code TicketIssuer}. Until that lands, {@link SandboxAuthorityTest} proves the rules on the existing
- * sandbox doubles and writes the same fields. A later effect path should call {@link #row} after a real
- * admission and must not mark {@code sandbox_path=bypass} as passed. The single-arg tool constructors stay
- * valid for pure unit tests; they are not ACS evidence.
+ * <p>Effect and ACS harnesses call {@link #copyTrace} after a real admission. {@code sandbox_path=bypass}
+ * is never a pass. The single-arg tool constructors stay valid for pure unit tests; they are not ACS evidence.
  *
  * <p>Scoring lives in {@code eval/effects.py}. This check only stops a row that would not pass from being
  * merged into {@code authority-continuity.jsonl}.
@@ -83,6 +83,49 @@ public final class SandboxAuthorityObservations {
                     && traces.isEmpty();
             default -> false;
         };
+    }
+
+    /**
+     * Project sandbox rows already stored on TraceStore onto this contract.
+     * An effect that landed without {@code ticket_id} is not observable as a pass.
+     * Credential refusals stay out of the trace: pass an empty event list and {@code effectSuccess=false}.
+     */
+    public static void copyTrace(Map<String, Object> row, List<TraceEvent> events, boolean effectSuccess, int processStarts) {
+        var types = new ArrayList<String>();
+        String ticket = null;
+        String last = null;
+        if (events != null) {
+            for (var event : events) {
+                if (event.type() == null || !event.type().startsWith("sandbox_")) continue;
+                types.add(event.type());
+                last = event.type();
+                if ("sandbox_admit".equals(event.type())) {
+                    String id = ticketId(event.detail());
+                    if (id != null) ticket = id;
+                }
+            }
+        }
+        row.put("sandbox_path", PATH_SANDBOXED);
+        row.put("policy_engine", "PolicyEngine");
+        row.put("admitted", ticket != null);
+        row.put("ticket_id", ticket);
+        row.put("sandbox_event", last);
+        row.put("trace_events", List.copyOf(types));
+        row.put("effect_success", effectSuccess);
+        row.put("process_starts", processStarts);
+        if (effectSuccess && ticket == null) {
+            throw new AssertionError("effect_success without ticket_id");
+        }
+    }
+
+    static String ticketId(String detail) {
+        if (detail == null) return null;
+        int start = detail.indexOf("ticket=");
+        if (start < 0) return null;
+        start += "ticket=".length();
+        int end = start;
+        while (end < detail.length() && !Character.isWhitespace(detail.charAt(end))) end++;
+        return end == start ? null : detail.substring(start, end);
     }
 
     public static void export(List<Map<String, Object>> rows) throws Exception {

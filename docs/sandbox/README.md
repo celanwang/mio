@@ -48,7 +48,7 @@
 | `RowIsolationGuard` | P2 行级隔离接缝，`principal_id = ?` 尚未加到现有表 |
 | `GET /api/security/sandbox` | 回环只读状态，不授予执行 |
 
-打车 `TencentRideService.execute` 是子进程的唯一启动点，它只调用 `ProcessSandbox`。主对话里的打车工具和生产里的领域工具都会带上 `SandboxExecutor`。评测夹具仍用单参数工具构造函数，并 mock `TencentRideService`，因此不会启动真实进程。
+打车 `TencentRideService.execute` 是子进程的唯一启动点，它只调用 `ProcessSandbox`。主对话里的打车工具、生产领域工具，以及离线效果 / ACS 夹具都带上 `SandboxExecutor`（合成工具再包 `SandboxedTool`）。夹具仍 mock `TencentRideService`，默认不启动 bubblewrap。单参数构造函数只留给不作为 ACS 证据的单元测试；效果夹具若绕过票据，`effect_success` 不能带上 `ticket_id`，观察行也不会是 `sandbox_path=sandboxed` 的通过。
 
 ## 已建立与未建立
 
@@ -58,7 +58,8 @@
 - 执行票据：只读放行、写操作缺少权限链放行、不可逆缺少人工确认、急停未确认、票据不能重复启动进程
 - 审计事件进 `TraceStore`（`sandbox_admit` / `sandbox_refuse` / `sandbox_egress` / `sandbox_start`），明细不含令牌
 - 打车桥接强制走进程沙箱；沙箱启动失败或缺少下单票据时不启动进程
-- 凭据代理：无租约拒绝出站
+- 凭据代理：无票据拒绝出站，且不写 `sandbox_egress` / `sandbox_refuse`（痕迹为空）
+- 离线夹具的准入投影复用 `SandboxAuthorityObservations` 字段（`sandbox_path`、`policy_engine`、`admitted`、`ticket_id`、`sandbox_event`、`trace_events`、`effect_success`、`process_starts`），不另开采集通道
 
 **未建立（不要当成已经做到）：**
 

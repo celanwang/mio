@@ -45,6 +45,7 @@ class FixtureBaselineTest {
                     row.put("evaluation_target", "scripted-fixture");
                     row.put("prompt_sha256", sha(Path.of("src/test/java/org/celanwang/mio/evaluation/AgentHarness.java")));
                     row.put("final_state", new LinkedHashMap<>(h.world.state)); row.put("actions", List.copyOf(h.world.actions));
+                    SandboxAuthorityObservations.copyTrace(row, h.traces.events(h.session), !h.world.actions.isEmpty(), 0);
                     row.put("events", h.traces.events(h.session)); output.add(row);
                 }
             }

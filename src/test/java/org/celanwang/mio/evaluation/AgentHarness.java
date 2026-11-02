@@ -10,6 +10,8 @@ import io.agentscope.extensions.judge.jev.JevClient;
 import org.celanwang.mio.memory.*;
 import org.celanwang.mio.model.dto.ChatRequest;
 import org.celanwang.mio.model.vo.ChatResponse;
+import org.celanwang.mio.sandbox.ExecutionTicket;
+import org.celanwang.mio.sandbox.OfflineSandbox;
 import org.celanwang.mio.security.*;
 import org.celanwang.mio.service.*;
 import org.celanwang.mio.trace.TraceStore;
@@ -26,6 +28,7 @@ final class AgentHarness implements AutoCloseable {
     final Toolkit toolkit = new Toolkit();
     final PolicyEngine policy = new PolicyEngine("shadow");
     final TraceStore traces = new TraceStore((s,e) -> {});
+    final OfflineSandbox sandbox = new OfflineSandbox(policy, traces);
     final TrustStore trust = mock(TrustStore.class);
     final ScenarioWorld world = new ScenarioWorld();
     final List<List<Msg>> modelInputs = new ArrayList<>();
@@ -71,7 +74,11 @@ final class AgentHarness implements AutoCloseable {
     AgentHarness() { this(null); }
     void addRide() throws Exception {
         var ride = mock(TencentRideService.class);
-        when(ride.execute(nullable(String.class), anyMap())).thenAnswer(inv -> {
+        when(ride.execute(nullable(String.class), anyMap(), any(ExecutionTicket.class))).thenAnswer(inv -> {
+            ExecutionTicket ticket = inv.getArgument(2);
+            if (ticket == null || ticket.id() == null || ticket.id().isBlank()) {
+                throw new AssertionError("ride fixture invoked without an execution ticket");
+            }
             Map<String,Object> request = inv.getArgument(1);
             String command = (String) request.get("command");
             @SuppressWarnings("unchecked") Map<String,Object> args = new LinkedHashMap<>((Map<String,Object>) request.getOrDefault("parameters", Map.of()));
@@ -79,10 +86,10 @@ final class AgentHarness implements AutoCloseable {
             String action = "create-order".equals(command) ? "ride-create" : "cancel-order".equals(command) ? "ride-cancel" : command;
             return new ObjectMapper().writeValueAsString(world.execute(action, args));
         });
-        toolkit.registerAgentTool(new org.celanwang.mio.tool.TencentRideTool(ride));
-        toolkit.registerAgentTool(new org.celanwang.mio.tool.TencentRideCreateOrderTool(ride));
+        toolkit.registerAgentTool(new org.celanwang.mio.tool.TencentRideTool(ride, sandbox.executor));
+        toolkit.registerAgentTool(new org.celanwang.mio.tool.TencentRideCreateOrderTool(ride, sandbox.executor));
     }
-    void add(String name, boolean readOnly) { toolkit.registerAgentTool(world.tool(name, readOnly)); }
+    void add(String name, boolean readOnly) { toolkit.registerAgentTool(world.tool(name, readOnly, sandbox.executor)); }
     void call(String name, Map<String, Object> input) {
         try {
             script.add(List.of(ToolUseBlock.builder().id(UUID.randomUUID().toString()).name(name).input(input)
@@ -101,5 +108,8 @@ final class AgentHarness implements AutoCloseable {
                 .map(c -> new ChatRequest.Confirmation(c.toolCallId(), approved)).toList());
         return service.chat(request).block(Duration.ofSeconds(suppliedModel == null ? 10 : 60));
     }
-    @Override public void close() { if (agent != null) agent.close(); }
+    @Override public void close() {
+        try { if (agent != null) agent.close(); }
+        finally { sandbox.close(); }
+    }
 }

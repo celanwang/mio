@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agentscope.core.message.ToolResultBlock;
 import io.agentscope.core.tool.ToolBase;
 import io.agentscope.core.tool.ToolCallParam;
+import org.celanwang.mio.sandbox.SandboxExecutor;
+import org.celanwang.mio.sandbox.SandboxedTool;
 import reactor.core.publisher.Mono;
 import java.util.*;
 
@@ -77,8 +79,11 @@ final class ScenarioWorld {
         };
     }
 
-    ToolBase tool(String name, boolean readOnly) {
-        return new ToolBase(ToolBase.builder().name(name).description("Offline synthetic fixture " + name)
+    /** No executor: the tool refuses and does not call {@link #execute}. */
+    ToolBase tool(String name, boolean readOnly) { return tool(name, readOnly, null); }
+
+    ToolBase tool(String name, boolean readOnly, SandboxExecutor executor) {
+        ToolBase raw = new ToolBase(ToolBase.builder().name(name).description("Offline synthetic fixture " + name)
                 .readOnly(readOnly).inputSchema(schema(name))) {
             @Override public Mono<io.agentscope.core.permission.PermissionDecision> checkPermissions(Map<String,Object> input, io.agentscope.core.permission.PermissionContextState context) {
                 return readOnly ? Mono.just(io.agentscope.core.permission.PermissionDecision.allow("fixture read")) : super.checkPermissions(input, context);
@@ -91,6 +96,7 @@ final class ScenarioWorld {
                 });
             }
         };
+        return new SandboxedTool(raw, executor, null);
     }
     static Map<String,Object> schema(String name) {
         Map<String,Object> properties = switch (name) {
