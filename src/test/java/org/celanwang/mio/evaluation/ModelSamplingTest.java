@@ -52,7 +52,8 @@ class ModelSamplingTest {
                         Map<String,Object> row = new LinkedHashMap<>();
                         row.put(suite.equals("tasks") ? "task_id" : "case_id",test.path("id").asText());
                         row.put("sample_id",String.valueOf(sample)); row.put("source","model"); row.put("session_id",h.session); row.put("model",modelName);
-                        row.put("route","explicit-single-model"); row.put("evaluation_target","skill-and-permission-simulation");
+                        row.put("route","explicit-single-model"); row.put("evaluation_target", EvaluationTargets.SKILL_AND_PERMISSION_SIMULATION);
+                        row.put("production_parity", false);
                         row.put("temperature",Double.parseDouble(System.getProperty("mio.eval.temperature","0")));
                         row.put("timestamp",OffsetDateTime.now().toString()); row.put("dataset_sha256",FixtureBaselineTest.sha(data));
                         row.put("skill_sha256",FixtureBaselineTest.skillSha(skill));

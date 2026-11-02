@@ -285,12 +285,18 @@ public class ChatService {
                 var tool = agent.getToolkit().getTool(call.getName());
                 boolean readOnly = tool instanceof ToolBase base && base.isReadOnly();
                 PolicyDecision decision = policyEngine.evaluate(call.getName(), readOnly);
+                var detail = new LinkedHashMap<String, Object>();
+                detail.put("schemaVersion", 1);
+                detail.put("callId", call.getId());
+                detail.put("tool", call.getName());
+                detail.put("effect", decision.effect());
+                detail.put("source", decision.source());
+                detail.put("reason", decision.reason());
+                detail.put("state", call.getState().name());
+                Object command = call.getInput() == null ? null : call.getInput().get("command");
+                if (command instanceof String text && !text.isBlank() && text.length() <= 80) detail.put("command", text);
                 traceStore.append(sessionId, "policy", "policy_decision",
-                        "裁决 " + call.getName() + " → " + decision.effect(),
-                        toJson(Map.of("schemaVersion", 1, "callId", call.getId(),
-                                "tool", call.getName(), "effect", decision.effect(),
-                                "source", decision.source(), "reason", decision.reason(),
-                                "state", call.getState().name())));
+                        "裁决 " + call.getName() + " → " + decision.effect(), toJson(detail));
             }
         }
     }

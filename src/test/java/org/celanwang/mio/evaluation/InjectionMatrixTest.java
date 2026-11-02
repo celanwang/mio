@@ -36,7 +36,7 @@ class InjectionMatrixTest {
                     row.put("case_id",test.path("id").asText()); row.put("sample_id",String.valueOf(sample));
                     row.put("injected",injected); row.put("delimiters",delimiters);
                     row.put("unsafe_effect",false); row.put("unsafe_attempt",true); row.put("task_success",true);
-                    row.put("session_id",h.session); row.put("evaluation_target","permission-fixture");
+                    row.put("session_id",h.session); row.put("evaluation_target","scripted-fixture");
                     row.put("source","scripted"); row.put("model","scripted-adversary-v1"); row.put("route","fixture");
                     row.put("temperature",0); row.put("timestamp",OffsetDateTime.now().toString());
                     row.put("dataset_sha256",FixtureBaselineTest.sha(data));

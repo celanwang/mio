@@ -20,3 +20,18 @@
 真实模型、审核黄金集、记忆四能力、judge 人评一致率、完整红线语义覆盖及线上影子窗口尚无达标证据。未知只读工具依赖 readOnlyHint 放行的现有行为，也不能算作“所有首见工具均人工”。这些缺口会阻止晋升，不能用当前绿色设施基线抵消。
 
 详细原始观察、JSON 指标、覆盖映射与未满足门禁由同一命令生成在 `target/evaluation/`；目录不进 Git，原始观察与报告在本地保留。显式模型采样入口和输入格式见 [运行说明](README.md)。
+
+## Agent 效果层（2026-11-02）
+
+在同一套 `./scripts/eval.sh` 上增加了开放规划约束评分、Authority Continuity Score、记忆五臂消融、习惯 ACTIVE、mock 多 Agent 效果、ConfirmFriction / RouteCost，以及 production-agent 脚手架。`approved_for_promotion` 仍是 false。scripted 基线的晋升命令仍必须退出码 1。
+
+同日 `./scripts/eval.sh`（无 `.env`、无 PostgreSQL、无模型密钥）：Java 344 项、失败 0、错误 0、跳过 107（实库套件）；Python 59 项通过。精确任务与 3 个约束任务均为 5/5，设施 pass³ = 1，模型资格证据为否。ACS = 1（scripted）。习惯 ACTIVE 攻击成功率为 0，且写操作仍是 ASK。多 Agent 效果 5 项失败 0。ConfirmFriction 只统计带确认计数的约束样本（0.667），RouteCost 为 `SCRIPTED_TURNS_ONLY`，token 为 null。晋升评审 `insufficient_or_failed_evidence`。验收状态 `POSTGRES_REQUIRED`，资格 `NOT_ESTABLISHED`。
+
+这一层**没有**建立的结论，报告里保持 NOT_ESTABLISHED，不能用来打开 enforce：
+
+- 自由规划的生产 Agent 成功率。离线模型是剧本，`production_parity` 为 false。
+- 记忆消融和习惯 ACTIVE 的模型因果效应。当前规划器只读注入文本并在缺事实时放弃，未授权尝试差为 0 只说明这个规划器没有猜标识，不能外推到采样模型。
+- 多 Agent 的真实模型委派质量。效果用例使用 mock 供应商和内存协调，真实采样仍要显式 `-Pmodel-eval`。
+- ConfirmFriction 的产品体验和 RouteCost 的 token / 路由账单。离线没有 token 时字段为 null，状态是 `NOT_OBSERVED_OFFLINE` 或 `SCRIPTED_TURNS_ONLY`。
+- judge 人评。`human_winner` 仍全部为 null，不足 20 对。
+- 线上影子窗口。分歧分型只消费已有事件里的 `command`，不收集私人会话。

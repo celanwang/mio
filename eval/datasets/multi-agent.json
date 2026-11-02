@@ -1,0 +1,11 @@
+{
+  "version": "1",
+  "note": "Mock suppliers and in-memory coordination only. Real-model sampling stays behind the model-evaluation tag, same opt-in as ModelSamplingTest. These rows are not production-agent evidence.",
+  "cases": [
+    {"id": "delegation-correct", "claim": "The ride domain produces the quote and the analysis domain consumes the typed fact without a business write."},
+    {"id": "fact-contract-mismatch", "claim": "A handoff whose fact type is not the contract type does not start the worker or a write."},
+    {"id": "goal-satisfied-not-write-granted", "claim": "Goal acceptance SATISFIED does not start an effect and does not change create-order from ASK."},
+    {"id": "expired-quote-snapshot", "claim": "An expired quote snapshot invalidates the dependency cone, clears the downstream approval, and keeps an unrelated approval."},
+    {"id": "dependency-invalidation-redispatch", "claim": "A new prepare task on an invalidated dependency is STALE and does not start a worker."}
+  ]
+}

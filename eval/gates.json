@@ -1,7 +1,8 @@
 {
   "version": "1",
   "approved_for_promotion": false,
-  "note": "Memory/judge thresholds follow the design. Other thresholds are proposed conservative defaults and require review with real holdout evidence. No production changes are automated.",
+  "note": "Memory/judge thresholds follow the design. Other thresholds are proposed conservative defaults and require review with real holdout evidence. minimum_authority_continuity is a hard rule, not a tuned quality bar. No production changes are automated. approved_for_promotion stays false until a person reviews real production-agent evidence.",
+  "minimum_authority_continuity": 1.0,
   "minimum_samples_per_task": 5,
   "minimum_pass_power_3": 0.8,
   "memory_evidence_recall": 0.9,
