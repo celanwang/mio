@@ -3,6 +3,7 @@ package org.celanwang.mio.orchestration;
 import io.agentscope.core.message.*;
 import io.agentscope.core.permission.*;
 import io.agentscope.core.tool.*;
+import org.celanwang.mio.align.ValueConflictAdvisor;
 import org.celanwang.mio.config.ToolPolicies;
 import org.celanwang.mio.security.*;
 import reactor.core.publisher.Mono;
@@ -15,6 +16,7 @@ final class GuardedDomainTool extends ToolBase implements ToolContract.SourceBou
     private final PolicyEngine policy;
     private final java.util.function.Supplier<CapabilityAvailability> availability;
     private final boolean declaredWrite;
+    private ValueConflictAdvisor align;
     GuardedDomainTool(ToolBase delegate,TaskExecution execution,PolicyEngine policy){
         this(delegate,execution,policy,()->CapabilityAvailability.of(CapabilityAvailability.State.UNKNOWN,"NOT_CHECKED","未检查"));
     }
@@ -29,6 +31,8 @@ final class GuardedDomainTool extends ToolBase implements ToolContract.SourceBou
         this.declaredWrite=declaredWrite;
     }
     @Override public AgentTool contractSource(){return delegate;}
+    /** Pre-execution hold. Null keeps the previous permission behavior for tests that do not wire alignment. */
+    GuardedDomainTool withAdvisor(ValueConflictAdvisor align){this.align=align;return this;}
     public static boolean readOnly(ToolBase tool,Map<String,Object> input){
         if(ToolPolicies.HUMAN_ONLY.contains(tool.getName()))return false;
         if(tool.getName().equals("tencent_ride"))return Set.of("preflight","get-resident-city","addr-keys","addr-get-value",
@@ -42,6 +46,13 @@ final class GuardedDomainTool extends ToolBase implements ToolContract.SourceBou
         if(!read&&task.spec().scope()==TaskScope.PREPARE)return Mono.just(PermissionDecision.deny("当前任务只允许查询与准备"));
         if(!read&&(policy.isCircuitOpen()||!ToolPolicies.isJevReviewable(getName(),input)))return Mono.just(PermissionDecision.ask("本次操作必须人工确认"));
         if(read)return Mono.just(PermissionDecision.allow("任务范围内的查询或当前草稿编辑"));
+        // Inside agent.call, before SandboxedTool / delegate execution. auditPolicyDecisions runs only after the call returns.
+        if(align!=null&&align.holdWrite(task.sessionId(),getName(),input,false,task.spec().objective())){
+            return Mono.just(PermissionDecision.builder().behavior(PermissionBehavior.ASK)
+                    .message("价值冲突，请先确认这次写操作")
+                    .decisionReason("value conflict safety check suggests ask before execution")
+                    .build());
+        }
         return delegate.checkPermissions(input,context);
     }
     @Override public Mono<ToolResultBlock> callAsync(ToolCallParam call){
