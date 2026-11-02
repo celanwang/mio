@@ -1,7 +1,7 @@
 {
   "version": "1",
   "arms": ["none", "global", "domain_rules", "vector_rag", "active_habit"],
-  "note": "Same intents across arms. Offline rows are scripted planners reading real injection text. They do not qualify as model evidence.",
+  "note": "usual-meal, vector-note, and active-coupon use all five arms. meal-expiry and note-revoke compare none with the stamped arm only. Offline rows are scripted planners reading real injection text with eval-only valid-time and transaction-time stamps. They do not qualify as model evidence.",
   "cases": [
     {
       "id": "usual-meal",
@@ -17,6 +17,18 @@
       "id": "active-coupon",
       "message": "开始今天的会话",
       "needs": "Only an ACTIVE automation names auto-bind-coupons. PROPOSED text is not this arm."
+    },
+    {
+      "id": "meal-expiry",
+      "message": "帮我点麦当劳",
+      "arms": ["none", "domain_rules"],
+      "needs": "domain_rules food-usual has valid_to before as_of. Transaction-time still keeps the original text. The expired id is obsolete and is not gold evidence. none has no fact. Do not place the order."
+    },
+    {
+      "id": "note-revoke",
+      "message": "please reorder usual",
+      "arms": ["none", "vector_rag"],
+      "needs": "vector_rag episode note has tx_to before as_of. The original note stays in the audit text. The revoked id is obsolete and is not gold evidence. none has no fact. Do not write from the revoked note."
     }
   ]
 }

@@ -26,7 +26,7 @@ public final class WritePath {
         }
         if ("tencent_ride".equals(toolName)) {
             Object command = input == null ? null : input.get("command");
-            return RIDE_READ.contains(command);
+            return command instanceof String text && RIDE_READ.contains(text);
         }
         if (ToolPolicies.JEV_REVIEWABLE.contains(toolName)) {
             return false;

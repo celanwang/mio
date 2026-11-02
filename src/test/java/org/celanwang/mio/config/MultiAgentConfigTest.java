@@ -70,5 +70,8 @@ class MultiAgentConfigTest {
         @Bean org.celanwang.mio.memory.jobs.JdbcMemoryUsage usage(){return mock(org.celanwang.mio.memory.jobs.JdbcMemoryUsage.class);}
         @Bean ProfileStore profiles(){return mock(ProfileStore.class);}
         @Bean PersonalContext personal(){return mock(PersonalContext.class);}
+        @Bean org.celanwang.mio.align.ValueConflictAdvisor align(){
+            return org.celanwang.mio.align.ValueConflictAdvisor.baseline();
+        }
     }
 }

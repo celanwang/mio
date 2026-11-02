@@ -202,6 +202,7 @@ def memory_lift_report(rows):
     corpus, skill_digest, unique_rows, validate_provenance = _deps()
     gold = corpus('memory-ablation')
     note = ('MemoryLift is success and unauthorized-attempt change against the none arm on the same intent. '
+            'meal-expiry and note-revoke compare none with the stamped arm and may omit the other arms. '
             'Offline scripted planners do not qualify as model evidence.')
     empty = dict(arms=list(MEMORY_ARMS), intents=[], missing_intents=sorted(gold),
                  qualifies_as_model_evidence=False, note=note)
