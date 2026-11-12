@@ -151,8 +151,17 @@ class AlignmentSandboxIntegrationTest {
             verify(f.jev, never()).systemOne(any());
             var approved = f.decide(pending, true);
             assertThat(approved.getPendingConfirmations()).isEmpty();
-            assertThat(f.task().approvals()).singleElement().satisfies(a ->
-                    assertThat(a.decision()).isEqualTo(Boolean.TRUE));
+            // Capture the real persisted decision before TaskRecord.start consumes the pending approvals.
+            var recorded = ArgumentCaptor.forClass(TaskRecord.class);
+            verify(f.store).saveTask(any(TaskRecord.class), recorded.capture(), eq("approval_recorded"));
+            assertThat(recorded.getValue().id()).isEqualTo(f.task().id());
+            assertThat(recorded.getValue().approvals()).singleElement().satisfies(a -> {
+                assertThat(a.id()).isEqualTo(pending.getPendingConfirmations().get(0).toolCallId());
+                assertThat(a.id()).isNotEqualTo(f.targetId);
+                assertThat(a.callId()).isEqualTo(f.targetId);
+                assertThat(a.decision()).isEqualTo(Boolean.TRUE);
+            });
+            assertThat(f.task().approvals()).isEmpty();
             f.assertExecutedOnce();
             f.assertObservations(ResolveStatus.CLEAR, result.status());
             f.assertControlDidNotResolveAgain(2);
@@ -271,7 +280,7 @@ class AlignmentSandboxIntegrationTest {
         final PolicyEngine policy = new PolicyEngine("shadow");
         final List<ObservedTrace> allTraceEvents = new CopyOnWriteArrayList<>();
         final TraceStore traces = new TraceStore((session, event) -> allTraceEvents.add(new ObservedTrace(session, event)));
-        final InMemoryCoordinationStore store = new InMemoryCoordinationStore();
+        final InMemoryCoordinationStore store = spy(new InMemoryCoordinationStore());
         final AtomicInteger bodies = new AtomicInteger();
         final AtomicInteger reads = new AtomicInteger();
         final List<ExecutionTicket> tickets = new CopyOnWriteArrayList<>();
